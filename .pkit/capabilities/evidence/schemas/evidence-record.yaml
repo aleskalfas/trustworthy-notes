@@ -1,0 +1,24 @@
+# Evidence records — the per-directory `evidence.yaml` shape adopters write.
+#
+# Each record captures one external excerpt that adopter prose cites
+# via `[ev:<slug>]` tokens (per [evidence:DEC-001-citation-discipline]).
+# This schema formalises the record shape from
+# [evidence:DEC-002-evidence-record-schema] so `pkit data validate` can
+# check it mechanically and IDEs with YAML Language Server can surface
+# autocomplete + inline diagnostics.
+
+schema_version: 1
+
+# Per-schema fallback binding (per [project-kit:COR-023]). Adopter
+# `evidence.yaml` files at the repo root or one level deep bind
+# automatically; deeper-nested files bind via `*/evidence.yaml`
+# because `fnmatch.fnmatch`'s `*` crosses path separators. Two-pattern
+# form is intentional — `fnmatch` does not support `**`.
+binds_to:
+  - "evidence.yaml"
+  - "*/evidence.yaml"
+
+# Entries. Each item carries its `id:` first; remaining per-entry
+# fields are declared in the companion's $defs.entry.properties.
+# Empty in the capability — actual records live in adopter trees.
+records: []

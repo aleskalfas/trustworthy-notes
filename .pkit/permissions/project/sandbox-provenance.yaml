@@ -1,0 +1,17 @@
+schema_version: 1
+entries:
+- kind: allow-write
+  value: ~/.cache/uv
+  toolkit: uv
+- kind: exclude-command
+  value: gh
+  toolkit: _manual
+- kind: allow-host
+  value: api.github.com
+  toolkit: github-api
+- kind: allow-unix-socket
+  value: /Users/kalfas/.1password/agent.sock
+  toolkit: socket:ssh-agent
+- kind: allow-host
+  value: api.anthropic.com
+  toolkit: anthropic-api

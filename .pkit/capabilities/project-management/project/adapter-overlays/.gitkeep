@@ -1,0 +1,6 @@
+# This directory holds adopter-owned adapter overlays per DEC-030.
+# Files like `claude-code.json` here mean the corresponding capability
+# contribution is active. Created by `pkit project-management
+# enable-default-agent` (and analogous enable subcommands), removed by
+# the matching disable subcommand. Empty by default — no overlays
+# active until the adopter opts in.

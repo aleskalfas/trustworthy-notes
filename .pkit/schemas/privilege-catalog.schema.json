@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "privilege-catalog.schema.json",
+  "title": "Privilege catalog",
+  "description": "Formal shape of privilege-catalog.yaml — the named privileges an agent may be permitted to do (per COR-028). Each entry declares a recognizer (structured matcher over Bash commands and/or harness tool names, with a regex escape hatch) and an optional scope dimension. Namespace owner: permission-grants references entries via the typed token `[privilege-catalog:<id>]` (COR-019). Companion per COR-018 / the .pkit/schemas/ area conventions.",
+  "x-pkit-id-collection": "/privileges",
+  "type": "object",
+  "required": ["schema_version", "privileges"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "source": { "$ref": "refs.schema.json#/$defs/source" },
+    "privileges": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": { "$ref": "#/$defs/entry" }
+      },
+      "additionalProperties": false,
+      "description": "Privilege definitions. Keys are kebab-case ids; values match $defs.entry."
+    }
+  },
+  "$defs": {
+    "privilege_ref": {
+      "type": "string",
+      "pattern": "^\\[privilege-catalog:[a-z][a-z0-9-]*\\]$",
+      "description": "Narrowed cross-schema reference pattern for the privilege-catalog namespace (per COR-019). Consumers $ref this rather than redeclaring the pattern."
+    },
+    "bash_matcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One Bash-command recognizer. Either a structured matcher (cmd [+ subcommand] [+ flag_any]) or a regex escape hatch (pattern). The runtime matcher segments compound commands and strips env-var prefixes before matching.",
+      "properties": {
+        "cmd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Leading command token to match (e.g. `git`, `docker`, `gh`)."
+        },
+        "subcommand": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "If present, the first non-flag token after `cmd` must be one of these (e.g. `[run, exec]` to match `docker run` but not `docker ps`)."
+        },
+        "flag_any": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "If present, the command must carry at least one of these flags (e.g. `[-rf, -fr]` for a destructive-rm guardrail)."
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Regex escape hatch matched against a command segment when the structured fields can't express the case. The author owns its fragility (Q4c)."
+        }
+      },
+      "anyOf": [
+        { "required": ["cmd"] },
+        { "required": ["pattern"] }
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "recognize"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line, domain-readable description of what this privilege permits."
+        },
+        "recognize": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "description": "How a request is identified as this privilege. At least one of `bash` / `tool`.",
+          "properties": {
+            "bash": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/bash_matcher" },
+              "minItems": 1,
+              "description": "Bash-command recognizers; a request matches if any item matches a command segment."
+            },
+            "tool": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Harness tool names this privilege covers (e.g. `Read`, `WebFetch`)."
+            }
+          }
+        },
+        "scope_type": {
+          "type": "string",
+          "enum": ["directory", "domain"],
+          "description": "The scope dimension a grant of this privilege may constrain. `directory` = path globs (enforced per-call by the hook); `domain` = host allowlist. Absent = unscoped (anywhere)."
+        },
+        "guardrail": {
+          "type": "boolean",
+          "description": "If true, the model synthesizes a baseline `{subject: all, effect: deny}` grant for this privilege — the catalog is the single source of truth for the guardrail deny set (per ADR-002's double-lock). The synthesized model deny is the fail-open hook half; the harness's native settings denies are the fail-closed half. Absent = false."
+        }
+      }
+    }
+  }
+}

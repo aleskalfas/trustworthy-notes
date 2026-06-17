@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hook-kinds/custom-script.schema.json",
+  "title": "Hook kind: custom-script",
+  "description": "Escape-hatch kind per DEC-024: runs an adopter-supplied script after the primary lifecycle operation. The kit hands the script a fixed env-var envelope: PKIT_HOOK_EVENT, PKIT_ISSUE_NUMBER (or PKIT_PR_NUMBER), PKIT_REPO, PKIT_HOOK_REPLAY, PKIT_DRY_RUN. The script returns 0 on success; non-zero causes report-and-continue per the failure semantics. Idempotency is the script's responsibility — PKIT_HOOK_REPLAY=true signals re-fire so the script can short-circuit.",
+  "x-pkit-hook-kind": "custom-script",
+  "x-pkit-idempotent": false,
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "script_path"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "custom-script",
+      "description": "Discriminator."
+    },
+    "script_path": {
+      "type": "string",
+      "pattern": "^project/",
+      "minLength": 9,
+      "description": "Path to the script, relative to the capability root (e.g., `project/hook-scripts/notify-slack.sh`). Must live under `project/` (adopter-owned per the no-shared-files invariant). Must be executable; pre-check verifies."
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300,
+      "default": 30,
+      "description": "Wall-clock timeout for the script. Default 30s. Engine kills the script and records a timeout failure if exceeded."
+    }
+  }
+}

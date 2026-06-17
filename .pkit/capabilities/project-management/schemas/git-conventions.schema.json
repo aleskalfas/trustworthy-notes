@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "git-conventions.schema.json",
+  "title": "Branch naming + PR body + merge + force-push policy",
+  "description": "Formal shape of git-conventions.yaml — one entry per git-surface convention (branch-naming, pr-body, merge-mechanics, force-push, base-branch). Each entry carries a template / pattern, validations tagged with severities, and prose. Top-level cross-cuts: `branch_slug_derivation` (the 6-step procedure), `multi_issue_pr_rules` (when allowed, what's checked), and `integration_branches` (the opt-in long-running shared branch construct). PR title is handled by titles.yaml's `pr` entry — this schema does not duplicate it. Consumed by the PR-open path of the create-issue / transition-state skills. Companion per COR-018.",
+  "x-pkit-id-collection": "/conventions",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "conventions",
+    "branch_slug_derivation",
+    "multi_issue_pr_rules",
+    "integration_branches"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "conventions": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/$defs/entry"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Convention entries keyed by surface id (e.g., `branch-name`, `pr-body`, `merge`, `force-push`, `base-branch`)."
+    },
+    "branch_slug_derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["steps", "examples"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "Ordered transformations applied to the issue title to produce the branch slug."
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "type_prefix", "issue_number", "branch_name"],
+            "additionalProperties": false,
+            "properties": {
+              "title": { "type": "string", "minLength": 1 },
+              "type_prefix": { "type": "string", "minLength": 1 },
+              "issue_number": { "type": "integer", "minimum": 1 },
+              "branch_name": { "type": "string", "minLength": 1 }
+            }
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "multi_issue_pr_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed", "rules"],
+      "properties": {
+        "allowed": {
+          "type": "boolean",
+          "description": "Whether multi-issue PRs are permitted. True (exception path); single-issue is the default."
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule", "severity"],
+            "additionalProperties": false,
+            "properties": {
+              "rule": { "type": "string", "minLength": 1 },
+              "severity": {
+                "$ref": "validation-severity.schema.json#/$defs/severity_ref"
+              }
+            }
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "integration_branches": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "opt_in",
+        "owner_types",
+        "branch_name_pattern",
+        "designation_marker_pattern",
+        "designation_position",
+        "propagation_rule",
+        "pr_target_rule",
+        "closure_path",
+        "force_push_allowed"
+      ],
+      "properties": {
+        "opt_in": {
+          "type": "boolean",
+          "description": "Whether integration branches require explicit owner designation (true)."
+        },
+        "owner_types": {
+          "type": "array",
+          "items": {
+            "$ref": "issue-types.schema.json#/$defs/issue_type_ref"
+          },
+          "uniqueItems": true,
+          "minItems": 1,
+          "description": "Issue types that may own an integration branch (EPIC, Feature, Umbrella — any container)."
+        },
+        "branch_name_pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Regex the integration branch name must match."
+        },
+        "designation_marker_pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Regex the body's `Integration:` line must match. Capturing the slug."
+        },
+        "designation_position": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the marker sits — first line of the owning issue's body, above the parent-ref. Matches the integration_marker block in body-format.yaml."
+        },
+        "propagation_rule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How descendants inherit the marker. The agent stamps the same line on every descendant body on designation; later filings under the owning issue inherit at creation."
+        },
+        "pr_target_rule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_when_marked", "bypass_severity"],
+          "properties": {
+            "target_when_marked": {
+              "type": "string",
+              "minLength": 1
+            },
+            "bypass_severity": {
+              "$ref": "validation-severity.schema.json#/$defs/severity_ref"
+            }
+          }
+        },
+        "closure_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How the owning issue and integration branch close. Marked descendants close on merge into the integration branch via `Closes #N`. Owning issue closes via a final `integration/<slug>` → main PR with `Closes #<owning>` — squash-merged with --delete-branch."
+        },
+        "force_push_allowed": {
+          "type": "boolean",
+          "description": "Whether force-push is allowed on the integration branch. False — same rule as `main` (shared branch)."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface_kind", "description", "rules"],
+      "properties": {
+        "surface_kind": {
+          "type": "string",
+          "enum": ["branch", "pr-body", "merge", "force-push", "base-branch"],
+          "description": "Which git surface this convention governs."
+        },
+        "pattern": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Regex or template the surface must match. Null when the convention is prose-only (e.g., force-push policy)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Prose explaining the convention."
+        },
+        "examples_good": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "examples_bad": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["example", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "example": { "type": "string", "minLength": 1 },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          },
+          "uniqueItems": true
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule", "severity"],
+            "additionalProperties": false,
+            "properties": {
+              "rule": { "type": "string", "minLength": 1 },
+              "severity": {
+                "$ref": "validation-severity.schema.json#/$defs/severity_ref"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional machine-readable rule identifier (e.g. 'body.placeholder.empty-checkbox-section'). Used by DEC-031's declare-in-schema / enforce-in-code pattern."
+              }
+            }
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

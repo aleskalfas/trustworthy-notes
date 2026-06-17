@@ -1,0 +1,92 @@
+schema_version: 1
+
+# Privilege catalog — the named domain things an agent may be permitted to do
+# (per COR-028). Each privilege declares how a request is recognized as
+# belonging to it (a structured matcher over Bash commands and/or harness tool
+# names, with a regex escape hatch per Q4c) and which scope dimension it accepts.
+#
+# Namespace owner: permission grants reference privileges via the typed token
+# [privilege-catalog:<id>] (COR-019). The baseline catalog content (vcs, docker,
+# web-fetch, repo-read, kit, guardrails) is authored against this shape in a
+# later task; this file ships the envelope and is extended by capabilities and
+# projects that introduce their own tools.
+
+privileges:
+  # --- common allow-shaped privileges ---
+  vcs:
+    description: Git version control.
+    recognize:
+      bash:
+        - cmd: git
+  issue-tracker:
+    description: GitHub issues and pull requests via the gh CLI.
+    recognize:
+      bash:
+        - cmd: gh
+  issue-tracker-write:
+    description: >-
+      Raw gh mutations that bypass the project-management capability's
+      validating scripts (gh issue edit, gh issue comment, gh pr edit).
+      Grant only to subjects that are explicitly permitted to bypass validation;
+      deny to force the validating scripts.
+    recognize:
+      bash:
+        # Matches gh issue edit, gh issue comment, gh pr edit — and ONLY those
+        # three mutations.  Does NOT match reads (gh issue view, gh pr view),
+        # gh api, or any other gh subcommand.  The pattern runs on the joined
+        # token segment after env-prefix stripping (decide.py segments()), so
+        # "export GH_HOST=x && gh issue edit …" is handled correctly.
+        - pattern: '^gh\s+(issue\s+(edit|comment)|pr\s+edit)(\s|$)'
+  kit:
+    description: Run the project-kit CLI.
+    recognize:
+      bash:
+        - cmd: pkit
+  docker:
+    description: Run docker / docker-compose.
+    recognize:
+      bash:
+        - cmd: docker
+        - cmd: docker-compose
+    scope_type: directory
+  web-fetch:
+    description: Fetch web content.
+    recognize:
+      tool:
+        - WebFetch
+        - WebSearch
+    scope_type: domain
+  repo-read:
+    description: Read repository files.
+    recognize:
+      tool:
+        - Read
+        - Grep
+        - Glob
+
+  # --- guardrail privileges (the baseline model grants these effect:deny) ---
+  privilege-escalation:
+    description: Privilege escalation via sudo.
+    guardrail: true
+    recognize:
+      bash:
+        - cmd: sudo
+  destructive-fs:
+    description: Recursive filesystem deletion (rm -r/-R/--recursive, any flag form).
+    guardrail: true
+    recognize:
+      bash:
+        # Recursive rm in ANY form: -r, -R, --recursive[=...], or a short bundle
+        # containing r/R (-rf, -fr, -fR, -Rf, -rfv, ...). A flag_any token list
+        # can't express bundles or `--recursive=`, so this uses the regex escape
+        # hatch. Bare `rm` / `rm -f <file>` (single-file, non-recursive) is
+        # intentionally NOT a guardrail — that is fs-cleanup territory.
+        - pattern: '^rm(?=\s).*(\s-[a-zA-Z]*[rR][a-zA-Z]*(\s|$)|\s--recursive)'
+  vcs-history-rewrite:
+    description: Rewriting published git history (force-push).
+    guardrail: true
+    recognize:
+      bash:
+        - cmd: git
+          subcommand: [push]
+          flag_any: ["--force", "-f", "--force-with-lease"]

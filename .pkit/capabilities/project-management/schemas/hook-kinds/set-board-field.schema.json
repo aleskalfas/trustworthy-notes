@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hook-kinds/set-board-field.schema.json",
+  "title": "Hook kind: set-board-field",
+  "description": "Sets a Projects v2 single-select or text field on the just-created or just-moved item. Per DEC-024's lifecycle-hook mechanism. Adopters declare one entry per board field they want auto-populated after the primary lifecycle operation lands. Idempotent: writing the same value is a no-op on the GitHub side.",
+  "x-pkit-hook-kind": "set-board-field",
+  "x-pkit-idempotent": true,
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "field_id"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "set-board-field",
+      "description": "Discriminator. Must equal 'set-board-field'."
+    },
+    "field_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Projects v2 field ID. Obtain via `gh api graphql -f query='{ node(id: \"<project-id>\") { ... on ProjectV2 { fields(first: 30) { nodes { ... on ProjectV2FieldCommon { id name } } } } }'`. Bootstrap validates the field exists on the configured board."
+    },
+    "single_select_option_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "For single-select fields: the option's ID. Mutually exclusive with `text_value`. Bootstrap validates the option exists on the field."
+    },
+    "text_value": {
+      "type": "string",
+      "description": "For text fields: the literal value to write. Mutually exclusive with `single_select_option_id`."
+    }
+  },
+  "oneOf": [
+    {"required": ["single_select_option_id"]},
+    {"required": ["text_value"]}
+  ]
+}

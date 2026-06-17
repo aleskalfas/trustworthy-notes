@@ -1,0 +1,11 @@
+schema_version: 2
+component:
+  kind: capability
+  name: evidence
+  version: 0.5.1
+description: Citation discipline — every factual claim cites an `[ev:slug]` token that resolves to a record in a per-directory `evidence.yaml`.
+requires_backbone: ">=1.26.0,<2.0.0"
+commands:
+  validate:
+    script: scripts/validate.py
+    help: Validate `[ev:slug]` citations under a scope directory against `evidence.yaml`.

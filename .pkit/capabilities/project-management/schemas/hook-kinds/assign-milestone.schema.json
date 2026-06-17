@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hook-kinds/assign-milestone.schema.json",
+  "title": "Hook kind: assign-milestone",
+  "description": "Sets the issue's milestone by title. Resolved at fire-time via `gh api repos/<owner>/<repo>/milestones`; written via `gh issue edit --milestone <title>`. Per DEC-024. Idempotent: a no-op when the issue's milestone already matches.",
+  "x-pkit-hook-kind": "assign-milestone",
+  "x-pkit-idempotent": true,
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "title"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "assign-milestone",
+      "description": "Discriminator."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The milestone title to assign. Bootstrap validates the milestone exists on the configured repo; fire-time re-validates as a safety net."
+    }
+  }
+}

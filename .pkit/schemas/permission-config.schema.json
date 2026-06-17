@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "permission-config.schema.json",
+  "title": "Permission ownership + posture config",
+  "description": "Formal shape of permission-config.yaml — the project's permission mode (per COR-028). `ownership_mode` chooses how much of the adopter's harness config the realizer owns (additive default / managed opt-in); `posture` chooses the default for unmodeled requests (lenient / strict). Document-shaped schema: the file IS the resource. Companion per COR-018 / the .pkit/schemas/ area conventions.",
+  "type": "object",
+  "required": ["schema_version", "ownership_mode", "posture"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "source": { "$ref": "refs.schema.json#/$defs/source" },
+    "ownership_mode": {
+      "type": "string",
+      "enum": ["additive", "managed"],
+      "description": "`additive` (default): the realizer only adds to harness config, never replaces. `managed`: the realizer owns + regenerates its settings region (COR-002 authoritative-region tier)."
+    },
+    "posture": {
+      "type": "string",
+      "enum": ["lenient", "strict"],
+      "description": "`lenient` (default): the hook abstains on unmodeled requests, deferring to the harness's normal flow. `strict`: unmodeled requests are denied."
+    },
+    "active_profile": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The active permission profile (per ADR-005) — the name of a `permission-profile` file shipped in `.pkit/permissions/profiles/` or project-defined in `.pkit/permissions/project/profiles/`. Set by `pkit permissions profile activate`. Absent = no profile active (only manual grants + guardrails)."
+    },
+    "confinement_accommodations": {
+      "type": "array",
+      "items": { "$ref": "confinement-toolkit.schema.json#/$defs/confinement-toolkit_ref" },
+      "description": "The adopter's chosen confinement toolkits whose NARROWING allowances `setup autonomy` applies to the OS sandbox (per ADR-008). Authoritative project state — committable because narrowing-only (a narrowing allowance never lowers the boundary). Widening allowances (excludedCommands, weaker-TLS) are NEVER recorded here; they are applied only by the explicit per-invocation `sandbox exclude` gesture. Set by `pkit permissions sandbox accommodate`."
+    }
+  }
+}

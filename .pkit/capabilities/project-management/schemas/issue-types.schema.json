@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "issue-types.schema.json",
+  "title": "Issue-type vocabulary + containment graph",
+  "description": "Formal shape of issue-types.yaml — the four GitHub-issue types (epic, feature, umbrella, task) the methodology recognises, what each represents, what each can contain via native sub-issues, what parent types each may sit under, and the textual first-line parent-ref form. Milestone is a separate primitive (see time-containers.yaml); sub-tasks are markdown checkboxes (see body-format.yaml). Other schemas reference entries here via the typed token `[issue-types:<id>]` (COR-019). Companion per COR-018.",
+  "x-pkit-id-collection": "/types",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "types"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "types": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/$defs/entry"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Issue types. Keys are kebab-case ids; values match $defs.entry."
+    },
+    "containment_invariants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule", "rationale"],
+        "additionalProperties": false,
+        "properties": {
+          "rule": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      },
+      "uniqueItems": true,
+      "description": "Cross-cut invariants over the containment graph that aren't expressible as a single per-type field (e.g., 'EPIC does not contain EPIC', 'Feature does not nest'). Editorial; the engine's containment checks derive from the per-entry `can_contain` lists."
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title_prefix",
+        "title_case",
+        "structural_role",
+        "can_contain",
+        "parent_issue_types",
+        "parent_ref_form",
+        "parent_ref_optional",
+        "has_body",
+        "body_has_acceptance_criteria",
+        "gets_branch_and_pr"
+      ],
+      "properties": {
+        "title_prefix": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z]+$",
+          "description": "Bracketed title prefix without the brackets themselves (e.g., `EPIC`, `Feature`). The agent wraps in `[...]` when applying."
+        },
+        "title_case": {
+          "type": "string",
+          "enum": ["upper", "title"],
+          "description": "Casing of `title_prefix` when rendered. EPIC is `upper`; others are `title`."
+        },
+        "structural_role": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-paragraph prose naming what this type represents in the hierarchy."
+        },
+        "can_contain": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/issue_type_ref_bare" },
+          "uniqueItems": true,
+          "description": "Issue-type ids this type may contain via native sub-issues. Empty list means leaf (e.g., Task contains only markdown sub-tasks)."
+        },
+        "parent_issue_types": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/issue_type_ref_bare" },
+          "uniqueItems": true,
+          "description": "Issue-type ids that may sit immediately above this type. Empty list means top of the issue-type hierarchy (EPIC; its scheduling parent is a Milestone, a different substrate)."
+        },
+        "parent_ref_form": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The textual first-line parent reference per MET-004 — the projection of the native sub-issue / Milestone link into the body. `<N>` is the placeholder for the parent's issue number."
+        },
+        "parent_ref_optional": {
+          "type": "boolean",
+          "description": "Whether the parent-ref first line may be omitted. True for EPIC when unscheduled (no Milestone yet); false otherwise."
+        },
+        "has_body": {
+          "type": "boolean",
+          "description": "Whether this type has a markdown issue body. True for all four issue types."
+        },
+        "body_has_acceptance_criteria": {
+          "type": "boolean",
+          "description": "Whether the body's minimum required structure includes a checkboxed acceptance-criteria section. Features and Tasks: yes. EPICs use 'Success criteria' (semantically distinct, separately encoded in body-format.yaml). Umbrellas: no — Umbrellas don't claim a capability."
+        },
+        "gets_branch_and_pr": {
+          "type": "boolean",
+          "description": "Whether this type produces a feature branch and a PR. Only Task. EPIC/Feature/Umbrella don't get branches; their closure is cascaded from children per MET-005."
+        }
+      },
+      "description": "Per-issue-type shape."
+    },
+    "issue_type_ref_bare": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Bare id of another entry in this same schema's `types`. Used for in-schema lists (`can_contain`, `parent_issue_types`). Cross-schema consumers use `issue_type_ref` below."
+    },
+    "issue_type_ref": {
+      "type": "string",
+      "pattern": "^\\[issue-types:[a-z][a-z0-9-]*\\]$",
+      "description": "Narrowed cross-schema reference token (COR-019) pointing at an entry in `issue-types.yaml`. Consuming schemas $ref this $def when a field's value identifies an issue type."
+    }
+  }
+}

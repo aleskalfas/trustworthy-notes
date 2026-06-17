@@ -1,0 +1,55 @@
+# Project-side adopter config for the project-management capability.
+# Dogfooded in project-kit itself — single-repo, label-fallback mode.
+
+schema_version: 1
+
+# Default branch for branch-name generation + base-branch enforcement
+# (per [project-management:DEC-013-branch-and-pr-conventions]).
+default_branch: main
+
+# GitHub host for `gh api` calls in capability scripts. `gh issue create`
+# / `edit` auto-infer the host from the git remote; `gh api` does not,
+# so scripts that hit raw endpoints (milestone lookup, project field
+# mutations) need this explicitly. Read by scripts/_lib/gh.py and
+# threaded as GH_HOST.
+gh:
+  host: github.ibm.com
+
+# project-kit doesn't use a Projects v2 board today — Priority and
+# Workstream fall back to `priority:*` / `workstream:*` labels per
+# [project-management:DEC-012-classification-axes].
+has_projects_v2_board: false
+
+# Pre-close triage lead-time in days (per
+# [project-management:DEC-016-time-bound-containers]).
+pre_close_triage_lead_days: 3
+
+# Transitional shim — pre-check.py still requires this field, but the
+# canonical workstreams list lives in project/workstreams.yaml per
+# [project-management:DEC-018-workstream-taxonomy-and-lifecycle].
+# Follow-up: update pre-check.py's REQUIRED_ADOPTER_CONFIG_FIELDS to
+# accept the workstreams.yaml-based shape and drop this shim.
+workstreams: []
+
+# Milestone categories per [project-management:DEC-016-time-bound-containers].
+# project-kit is feature-driven (no calendar; releases when work lands);
+# Milestones serve as outcome bundles wrapping related EPICs that close
+# together. One category is enough.
+milestone_categories:
+  milestone:
+    title_format: "Milestone {n}: {name}"
+    close_trigger_default: content-based
+    description: "Outcome bundle of related EPICs; closes when every child EPIC closes. No date."
+
+# Review-mode configuration per [project-management:DEC-027-review-modes]
+# and [project-management:DEC-028-agent-as-approver-paths].
+#
+# project-kit dogfoods its own capability: agent-mode (the default) with
+# the capability's default `reviewer` agent registered. The remote path
+# is unconfigured today — project-kit has no bot identity. Adopters who
+# want the autonomous-loop closure point ship a bot via the remote path.
+review:
+  mode: agent
+  agents:
+    local_registered:
+      - name: reviewer

@@ -1,0 +1,22 @@
+# Permission profile: autonomous (per ADR-005). Non-destructive + infra/network
+# domain privileges (docker, web-fetch). Scripting autonomy (bash/python without
+# prompts) is REFERENCED, not granted here: it rides the OS sandbox — turn it on
+# with `pkit permissions sandbox enable` (#274; fail-closed per ADR-004) for
+# prompt-free scripting confined to the box. A profile still never WRITES the
+# sandbox block (ADR-005): confinement stays a separate, session-wide operator
+# gesture. The guardrail floor always denies underneath.
+# read-only ⊂ non-destructive ⊂ autonomous.
+schema_version: 1
+
+description: Non-destructive + docker + web-fetch; prompt-free scripting via `pkit permissions sandbox enable`.
+posture: lenient
+grants:
+  - subject: all
+    privilege:
+      - "[privilege-catalog:vcs]"
+      - "[privilege-catalog:issue-tracker]"
+      - "[privilege-catalog:kit]"
+      - "[privilege-catalog:repo-read]"
+      - "[privilege-catalog:docker]"
+      - "[privilege-catalog:web-fetch]"
+    effect: allow

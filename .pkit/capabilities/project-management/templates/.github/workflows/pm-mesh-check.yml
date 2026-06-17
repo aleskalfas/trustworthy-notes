@@ -1,0 +1,85 @@
+# pm-mesh-check — scheduled methodology-mesh drift detector
+# (per project-management:DEC-022).
+#
+# Compares this repo's methodology-shared state (type:* / priority:* /
+# workstream:* labels, members.yaml, capability version, milestone
+# titles) against the peer repos declared in
+# `.pkit/capabilities/project-management/project/config.yaml`'s
+# `mesh_peers:` or `mesh_source:` field.
+#
+# Findings surface in two channels (adopter-configurable below):
+#   - `comment_on_issue` (default) — opens or updates a tracking issue
+#     labelled `mesh-drift`.
+#   - `status_check` — fail the job if any drift; surfaces in the
+#     repo's check status.
+#
+# Adopter-installed: copy this file to `.github/workflows/` in your
+# own repo. The kit-shipped path under
+# `.pkit/capabilities/project-management/templates/.github/workflows/`
+# is canonical.
+
+name: pm-mesh-check
+
+on:
+  schedule:
+    - cron: '17 7 * * *'  # daily at 07:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  # Output channel: 'comment_on_issue' | 'status_check'.
+  PM_MESH_OUTPUT: 'comment_on_issue'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run pm check-mesh
+        id: mesh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+          if [ ! -f .pkit/capabilities/project-management/scripts/check-mesh.py ]; then
+            echo "::warning::project-management capability not installed; skipping."
+            exit 0
+          fi
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run --script .pkit/capabilities/project-management/scripts/check-mesh.py --json > /tmp/mesh.json
+          cat /tmp/mesh.json
+          n=$(python3 -c "import json,sys;d=json.load(open('/tmp/mesh.json'));print(len(d.get('drift', [])) if isinstance(d, dict) else 0)")
+          echo "drift_count=$n" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update mesh-drift tracking issue
+        if: env.PM_MESH_OUTPUT == 'comment_on_issue' && steps.mesh.outputs.drift_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          existing=$(gh issue list --label mesh-drift --state open --json number --jq '.[0].number // empty')
+          body=$(printf '%s\n\n```json\n%s\n```\n' \
+            "[pm-mesh-check] $(date -u +%F): drift detected across configured peers." \
+            "$(cat /tmp/mesh.json)")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "[mesh-drift] methodology state drift across configured peers" \
+              --body "$body" --label mesh-drift
+          fi
+
+      - name: Fail on drift (status-check mode)
+        if: env.PM_MESH_OUTPUT == 'status_check' && steps.mesh.outputs.drift_count != '0'
+        run: |
+          echo "::error::pm-mesh-check found drift; see workflow output."
+          exit 1

@@ -1,0 +1,165 @@
+# Time-bound containers (Milestone, Iteration).
+#
+# Two container types. Milestone is mandatory and primary (native
+# GitHub Milestone, project-defined semantics: sprint / release wave /
+# quarter — declared per-Milestone on its first line via
+# `Close trigger:`). Iteration is optional secondary (Projects v2
+# Iteration field), used when a project wants both coarser and finer
+# timeboxes.
+#
+# Each container declares its substrate, allowed close-triggers
+# (`date-based`, `content-based`, `either`), the marker pattern and
+# severity for trigger declaration, the rollforward cascade behaviour
+# (date-based only), and the pre-close triage cadence (courtesy, not a
+# gate). Top-level cross-cuts: three iteration usage patterns and the
+# interaction with workflow.yaml's closure cascade.
+#
+# Consumed by create-issue (Milestone-aware filing, parent-ref form for
+# unscheduled EPICs), validate-body (close-trigger marker check), and
+# transition-state (rollforward cascade at date-based close).
+
+schema_version: 1
+
+source:
+  upstream: pm-workflow
+  commit: 9d1f0237f5d5778ed9811c72f22ae8268e5faff3
+  decisions: [MET-015]
+  captured_at: 2026-05-21
+
+containers:
+  milestone:
+    substrate: "Native GitHub Milestone"
+    required: true
+    typical_duration: |
+      Project-specific. The methodology accommodates sprint (typically
+      2 weeks — the team's current usage), release wave (multi-week),
+      and quarter. Semantics is declared per-Milestone on its first
+      line via the `Close trigger:` marker; not pinned at the
+      methodology level.
+    structural_facts:
+      - "Every Milestone has a name, an optional due date, and a close condition."
+      - "An issue is assigned to at most one Milestone at a time."
+      - "Milestone field is part of every issue's classification (axes apply alongside Milestone)."
+      - "Milestones do not nest — flat, one-level."
+    title_format_ref: "[titles:milestone]"
+    close_triggers:
+      - value: date-based
+        behaviour: |
+          Closes when due date passes (or manual early close). Open
+          children roll forward to the next Milestone; closed children
+          stay tagged to the closing Milestone as a historical
+          record.
+        rollforward: true
+      - value: content-based
+        behaviour: |
+          Closes only when every child is closed (workflow.yaml's
+          closure cascade applies as written). By definition no open
+          children when the close fires.
+        rollforward: false
+      - value: either
+        behaviour: |
+          Closes on whichever fires first (date or content). Rollforward
+          runs only when the date trigger fired; the content path closes
+          with no open children, so rollforward is a no-op there.
+        rollforward: true
+    close_trigger_marker:
+      pattern: '^Close trigger: (date-based|content-based|either)$'
+      position: |
+        First line of the Milestone's description. Blank line after,
+        then the description content.
+      new_filing_severity: "[validation-severity:hard-reject]"
+      inherited_without_marker_severity: "[validation-severity:warning]"
+      fallback_inference: |
+        For an inherited Milestone without the marker: native due date
+        present → treat as `date-based`; no native due date → treat
+        as `content-based`. Agent warns when inferring and offers to
+        write the marker into the description on the next
+        interaction.
+      rollforward_target_field:
+        pattern: '^Rollforward target: .+$'
+        default_behaviour: |
+          When absent, rollforward target is the next-numbered open
+          Milestone. If multiple candidates remain ambiguous, the
+          agent prompts the user at rollforward time.
+        wrong_target_severity: "[validation-severity:warning]"
+    rollforward_behaviour:
+      steps:
+        - "The Milestone closes regardless of how many children are still open. Date is the trigger; no exception."
+        - "Open children are reassigned to the rollforward-target Milestone (not closed). State is preserved — a Task in `In Progress` stays `In Progress`; an EPIC in `Backlog` stays `Backlog`."
+        - "Closed children stay assigned to the closing Milestone as a historical record of what shipped."
+        - "Cascade propagates upward: parents (Features, Umbrellas, EPICs) of rolled-forward open children move with the open children if the parent was also assigned to the closing Milestone."
+      parent_follow_rule: |
+        If a parent has both closed and open children, the parent
+        moves with the open ones to the rollforward target; the
+        closed ones stay tagged to the original Milestone as a record
+        of partial delivery.
+    pre_close_triage:
+      lead_time_days_default: 3
+      actions_available:
+        - "Close items as won't-do (with reason)."
+        - "Manually reassign individual children to a different Milestone."
+        - "Let automatic rollforward run at date-close."
+      is_gate: false
+
+  iteration:
+    substrate: "Projects v2 Iteration field"
+    required: false
+    typical_duration: |
+      Project-specific. When used alongside Milestone, typically a
+      finer timebox (sprint inside a release wave) or a themed cluster
+      within a sprint.
+    structural_facts:
+      - "Iteration is recognised when present on a Projects v2 board; methodology doesn't mandate its use."
+      - "Iteration is orthogonal to Milestone — the two compose per the usage patterns below."
+      - "When Iteration carries the sprint semantic, the same rollforward cascade applies on its close."
+    close_triggers:
+      - value: date-based
+        behaviour: |
+          Same as Milestone's date-based trigger but at the Iteration
+          tier. Rollforward to the next Iteration when configured.
+        rollforward: true
+      - value: content-based
+        behaviour: |
+          Iteration closes when every assigned issue closes. Rare
+          configuration.
+        rollforward: false
+    close_trigger_marker:
+      pattern: '^Close trigger: (date-based|content-based|either)$'
+      position: |
+        Iteration in Projects v2 has no native description field; when
+        the marker is needed, it lives on the Iteration's title or in
+        a project-side configuration mapping iteration → trigger. The
+        agent normalises both forms.
+      new_filing_severity: "[validation-severity:warning]"
+      inherited_without_marker_severity: "[validation-severity:warning]"
+      fallback_inference: |
+        Iterations typically have a date range — default to
+        `date-based`.
+
+iteration_usage_patterns:
+  - id: pattern-a
+    description: |
+      Milestone = release wave (multi-week), Iteration = sprint
+      (typically 2 weeks). Use when planning at two granularities.
+  - id: pattern-b
+    description: |
+      Milestone = sprint, no Iteration. The team's current setup —
+      single time tier sized as sprint. Default for adopters with no
+      explicit need for a second tier.
+  - id: pattern-c
+    description: |
+      Milestone = sprint, Iteration = themed cluster within the
+      sprint. Rare; useful when a single sprint hosts multiple
+      independent workstreams that each want their own bucket.
+
+cascade_interaction:
+  description: |
+    Rollforward and the closure cascade in workflow.yaml are
+    independent: descendants reassigned via rollforward do NOT count
+    as 'closed' for the parent's closure-cascade eligibility. Only
+    actually-closed children matter for that cascade direction. A
+    parent with rolled-forward open children stays open and follows
+    them forward; the closure-cascade prompt fires only when the last
+    *closed* child crosses the threshold (parent becomes
+    eligible-to-close).
+  rolled_forward_descendants_skip_closure_cascade: true

@@ -1,0 +1,13 @@
+# Permission grant model (per COR-028) — the project's declared permission intent.
+#
+# Each grant attaches a subject (an agent, the shared `all` baseline, or the
+# `operator` — the human driving the session) to one or more privileges from the
+# privilege-catalog, optionally constrained to a scope, with an allow/deny effect.
+# An agent's effective permissions are `all ∪ agent:<name>`, with deny winning
+# over allow. This is adopter-owned project state (the engine + the PreToolUse
+# hook read it; `pkit permissions grant` / `revoke` mutate it). Privileges are
+# referenced as typed tokens `[privilege-catalog:<id>]` (COR-019).
+
+schema_version: 1
+
+grants: []

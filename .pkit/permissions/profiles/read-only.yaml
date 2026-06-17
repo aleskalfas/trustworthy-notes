@@ -1,0 +1,11 @@
+# Permission profile: read-only (per ADR-005). Agents may read the repo and
+# nothing else — strict posture denies anything unmodeled. The most restrictive
+# shipped tier; read-only ⊂ non-destructive ⊂ autonomous.
+schema_version: 1
+
+description: Read the repo only — strict; everything unmodeled is denied.
+posture: strict
+grants:
+  - subject: all
+    privilege: "[privilege-catalog:repo-read]"
+    effect: allow

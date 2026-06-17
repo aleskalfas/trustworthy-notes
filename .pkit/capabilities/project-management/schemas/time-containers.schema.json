@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "time-containers.schema.json",
+  "title": "Time-bound containers (Milestone, Iteration) — semantics, close triggers, rollforward",
+  "description": "Formal shape of time-containers.yaml — the two time-bound container types the methodology recognises (Milestone: mandatory primary; Iteration: optional secondary). Per-container fields fix the substrate, whether the container is required on every issue, the typical duration, the close-trigger vocabulary the methodology accepts (`date-based`, `content-based`, `either`), the marker pattern + severity for the trigger declaration, the rollforward cascade behaviour for date-based closes, and the pre-close triage cadence. Top-level cross-cuts: `iteration_usage_patterns` (the three patterns from MET-015) and `cascade_interaction` (how rollforward interacts with the workflow.yaml closure cascade). Consumed by the create-issue / transition-state skills for Milestone-aware filing and the pre-close triage routine. Companion per COR-018.",
+  "x-pkit-id-collection": "/containers",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "containers",
+    "iteration_usage_patterns",
+    "cascade_interaction"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "containers": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/$defs/entry"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Container entries keyed by container id (`milestone`, `iteration`)."
+    },
+    "iteration_usage_patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^pattern-[a-z]$",
+            "description": "Pattern id (`pattern-a`, `pattern-b`, `pattern-c`)."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "How Milestone and Iteration are used together — coarser/finer, sprint, themed cluster."
+          }
+        }
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Three patterns for using Iteration alongside Milestone (or instead of it as a secondary tier). The methodology doesn't impose a pattern; describes how the substrate composes when both layers are in play."
+    },
+    "cascade_interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "rolled_forward_descendants_skip_closure_cascade"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How rollforward interacts with workflow.yaml's closure cascade."
+        },
+        "rolled_forward_descendants_skip_closure_cascade": {
+          "type": "boolean",
+          "description": "Whether descendants reassigned via rollforward count toward the parent's closure-cascade eligibility. False — only closed children matter for that cascade direction."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "substrate",
+        "required",
+        "typical_duration",
+        "structural_facts",
+        "close_triggers",
+        "close_trigger_marker"
+      ],
+      "properties": {
+        "substrate": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the container lives in GitHub — `native GitHub Milestone`, `Projects v2 Iteration field`."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether the methodology mandates this container's use. Milestone: true. Iteration: false."
+        },
+        "typical_duration": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Prose describing the typical duration — `project-specific (sprint, release wave, quarter)`."
+        },
+        "structural_facts": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Structural rules that hold regardless of semantics (e.g., `every Milestone has a name, optional due date, close condition`; `an issue is assigned to at most one Milestone`)."
+        },
+        "title_format_ref": {
+          "type": "string",
+          "pattern": "^\\[titles:[a-z][a-z0-9-]*\\]$",
+          "description": "Typed-token reference into titles.yaml for the container's title format (Milestone points at the `milestone` entry there). Optional; absent for containers without a title surface (Iteration values are typically short numeric tokens, not formatted titles)."
+        },
+        "close_triggers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/close_trigger" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Allowed close-trigger values declared on the container itself. Each entry carries the value, behaviour, and rollforward implication."
+        },
+        "close_trigger_marker": {
+          "$ref": "#/$defs/close_trigger_marker_block"
+        },
+        "rollforward_behaviour": {
+          "$ref": "#/$defs/rollforward_block",
+          "description": "Mechanics of the rollforward cascade when a date-based container closes with open children. Optional for containers that don't roll forward."
+        },
+        "pre_close_triage": {
+          "$ref": "#/$defs/pre_close_triage_block",
+          "description": "When and how the agent surfaces an open-children triage prompt before a date-based close."
+        }
+      }
+    },
+    "close_trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "behaviour", "rollforward"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "enum": ["date-based", "content-based", "either"]
+        },
+        "behaviour": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rollforward": {
+          "type": "boolean",
+          "description": "Whether open children roll forward when this trigger fires. `date-based`: true; `content-based`: false (by definition no open children); `either`: rollforward only when the date trigger fired."
+        }
+      }
+    },
+    "close_trigger_marker_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern", "position", "new_filing_severity", "inherited_without_marker_severity"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Regex the container's description's first line must match — `^Close trigger: (date-based|content-based|either)$`."
+        },
+        "position": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the marker sits — first line of the container's description, blank line after, then content."
+        },
+        "new_filing_severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity when a new container is filed without the marker or with an invalid value (hard-reject per MET-013)."
+        },
+        "inherited_without_marker_severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity when an existing container is read without the marker (warning — infer from due-date presence and prompt to write the marker on the next interaction)."
+        },
+        "fallback_inference": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How the agent infers the close trigger when the marker is absent on an inherited container. Has due date → `date-based`; no due date → `content-based`."
+        },
+        "rollforward_target_field": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pattern", "default_behaviour", "wrong_target_severity"],
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Regex for the optional `Rollforward target: <Milestone>` line."
+            },
+            "default_behaviour": {
+              "type": "string",
+              "minLength": 1
+            },
+            "wrong_target_severity": {
+              "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+              "description": "Severity when the rollforward target references a non-existent or closed container."
+            }
+          }
+        }
+      }
+    },
+    "rollforward_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["steps", "parent_follow_rule"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Ordered actions the agent performs on date-based close."
+        },
+        "parent_follow_rule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How parents (Features, Umbrellas, EPICs) follow their children across the rollforward — moves with open ones; closed ones stay tagged historically."
+        }
+      }
+    },
+    "pre_close_triage_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lead_time_days_default", "actions_available", "is_gate"],
+      "properties": {
+        "lead_time_days_default": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many days before due date the agent surfaces the triage prompt. Project-configurable; default 3."
+        },
+        "actions_available": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "is_gate": {
+          "type": "boolean",
+          "description": "Whether triage is a gate (blocks close) or a courtesy (informational). False — courtesy."
+        }
+      }
+    }
+  }
+}

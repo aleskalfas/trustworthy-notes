@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-kit/capabilities/project-management/mandatory-issue-state.schema.json",
+  "title": "Mandatory issue state — schema companion",
+  "description": "JSON Schema for `.pkit/capabilities/project-management/schemas/mandatory-issue-state.yaml`. Per project-management:DEC-019, declares required-but-not-classification per-issue state (assignee, board_membership, ...) with substrate, default-at-filing, and per-event severity.",
+  "type": "object",
+  "required": ["schema_version", "required_fields"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "required_fields": {
+      "description": "Map of field name → field descriptor.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "substrate",
+          "required_on_every_issue",
+          "missing_severity",
+          "drift_severity"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string" },
+          "substrate": {
+            "description": "Where the field lives. Methodology-defined token.",
+            "type": "string"
+          },
+          "required_on_every_issue": { "type": "boolean" },
+          "applies_when": {
+            "description": "Optional gate condition expressed as a config-style predicate.",
+            "type": "string"
+          },
+          "multiplicity": {
+            "type": "string",
+            "enum": ["one", "one-or-more"]
+          },
+          "default_at_filing": { "type": "string" },
+          "values_constrained_to": { "type": "string" },
+          "missing_severity": {
+            "type": "string",
+            "pattern": "^\\[validation-severity:[a-z-]+\\]$"
+          },
+          "drift_severity": {
+            "type": "string",
+            "pattern": "^\\[validation-severity:[a-z-]+\\]$"
+          }
+        }
+      }
+    }
+  }
+}

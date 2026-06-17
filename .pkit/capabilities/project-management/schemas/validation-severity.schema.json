@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "validation-severity.schema.json",
+  "title": "Validation severity vocabulary",
+  "description": "Formal shape of validation-severity.yaml — the three severity classes (hard-reject, bypassable-with-audit, warning) the methodology tags every validation rule with, plus the bypass / audit-comment / abort semantics each class implies. Other schemas reference entries here via the typed token `[validation-severity:<id>]` (COR-019). Companion per COR-018 / the .pkit/schemas/ area conventions.",
+  "x-pkit-id-collection": "/severities",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "severities"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "severities": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/$defs/entry"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Severity classes. Keys are kebab-case ids; values match $defs.entry."
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "behaviour",
+        "bypassable",
+        "aborts_operation"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line description of when this severity applies."
+        },
+        "behaviour": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the agent does when a rule of this severity is violated."
+        },
+        "bypassable": {
+          "type": "boolean",
+          "description": "Whether the user may override the agent's refusal. Mutually informative with `aborts_operation`."
+        },
+        "aborts_operation": {
+          "type": "boolean",
+          "description": "Whether the agent halts the operation on violation. `true` for hard-reject and bypassable-with-audit (unless the user bypasses); `false` for warning."
+        },
+        "audit_comment_template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "When `bypassable: true`, the comment format the agent posts on the affected issue/PR before the mutation runs. Placeholders use `<name>` style. Omit when `bypassable: false`."
+        },
+        "override_syntax": {
+          "type": "string",
+          "minLength": 1,
+          "description": "User-facing override syntax (e.g., `--bypass \"<reason>\"`). Present only when `bypassable: true`."
+        },
+        "examples": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Representative rules tagged with this severity, sourced from the upstream methodology. Illustrative, not exhaustive."
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Free-form notes that don't fit other fields (rationale fragments, edge cases). Optional."
+        }
+      },
+      "description": "Per-severity shape. Each entry names the class and pins the agent's behaviour for it."
+    },
+    "severity_ref": {
+      "type": "string",
+      "pattern": "^\\[validation-severity:[a-z][a-z0-9-]*\\]$",
+      "description": "Narrowed cross-schema reference token (COR-019) pointing at an entry in `validation-severity.yaml`. Consuming schemas $ref this $def when a field's value identifies a severity class."
+    }
+  }
+}

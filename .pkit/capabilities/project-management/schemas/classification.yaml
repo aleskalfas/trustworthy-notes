@@ -1,0 +1,144 @@
+# Classification axes (type, priority, workstream) + PR-type mapping.
+#
+# Three classification axes the methodology mandates on every issue.
+# Type is always a label (drives PR-title alignment); Priority and
+# Workstream prefer Projects v2 single-select fields when a board
+# exists, falling back to `<axis>:*` labels when no board is
+# configured. Values are methodology-fixed for Type and Priority, open
+# and project-defined for Workstream.
+#
+# Top-level `pr_type_mapping` bridges the closing issue's `type:*`
+# label to the PR's Conventional Commits `<type>` (per MET-010 +
+# MET-011). Consumed by create-issue (apply defaults, validate axes at
+# filing) and the PR-open path (derive `<type>` for the PR title).
+
+schema_version: 1
+
+source:
+  upstream: pm-workflow
+  commit: 9d1f0237f5d5778ed9811c72f22ae8268e5faff3
+  decisions: [MET-011]
+  captured_at: 2026-05-21
+
+axes:
+  type:
+    description: |
+      Structural kind of work; drives the closing PR's Conventional
+      Commits `<type>` AND the Task's title prefix at the issue level
+      (per [project-management:DEC-011-title-formats]). The kind label
+      and Task title prefix stay aligned through `title_prefix_by_value`.
+    substrate_with_board: "label (`type:*`) — always a label regardless of board presence"
+    substrate_without_board: "label (`type:*`)"
+    values:
+      - feature
+      - bug
+      - docs
+      - test
+      - refactor
+      - maintenance
+    values_project_specific: false
+    mutually_exclusive: true
+    title_prefix_by_value:
+      feature: Task
+      bug: Bug
+      docs: Docs
+      test: Test
+      refactor: Refactor
+      maintenance: Chore
+    structural_restriction:
+      description: |
+        Non-feature kinds are restricted to the `task` structural type
+        (per [project-management:DEC-011-title-formats] + DEC-004's
+        hierarchy). `feature`, `umbrella`, `epic` always carry kind
+        `feature` implicitly — they deliver capability work by
+        definition.
+      allowed_structural_types_per_kind:
+        feature: [task, feature, umbrella, epic]
+        bug: [task]
+        docs: [task]
+        test: [task]
+        refactor: [task]
+        maintenance: [task]
+      mismatch_severity: "[validation-severity:hard-reject]"
+    default_inference_strategy: |
+      Inferred from filing intent (e.g., 'file a bug' → `type:bug`;
+      'ship a new capability' → `type:feature`). Agent asks if
+      ambiguous. An issue spanning multiple kinds picks the dominant
+      kind.
+    required_on_every_issue: true
+    missing_severity: "[validation-severity:hard-reject]"
+    wrong_value_severity: "[validation-severity:hard-reject]"
+
+  priority:
+    description: |
+      Triage signal — how soon this should be worked on.
+    substrate_with_board: "Projects v2 single-select field (`Priority`)"
+    substrate_without_board: "label (`priority:*`)"
+    values:
+      - High
+      - Medium
+      - Low
+    values_project_specific: false
+    mutually_exclusive: true
+    default_value: Medium
+    required_on_every_issue: true
+    missing_severity: "[validation-severity:hard-reject]"
+    wrong_value_severity: "[validation-severity:hard-reject]"
+
+  workstream:
+    description: |
+      Which workstream this issue belongs to. Cross-repo workstreams
+      typically share values at the org level so the same value means
+      the same thing across repos.
+    substrate_with_board: "Projects v2 single-select field (`Workstream`), org-level so values are shared across repos"
+    substrate_without_board: "label (`workstream:*`)"
+    values_project_specific: true
+    mutually_exclusive: true
+    default_inference_strategy: |
+      Inferred from file paths or topic of the filing intent; agent
+      asks if ambiguous. The methodology mandates the axis, not the
+      value set — adopters declare their allowed workstreams in
+      project-side configuration.
+    required_on_every_issue: true
+    missing_severity: "[validation-severity:hard-reject]"
+    wrong_value_severity: "[validation-severity:hard-reject]"
+
+  review:
+    description: |
+      Per-issue review-mode override per [project-management:DEC-027-review-modes].
+      Layer 2 in the three-layer resolution (project default → label →
+      flag). When set, forces this issue's PR to be reviewed in the
+      named mode regardless of project default. Optional — most issues
+      don't need this; the project default applies.
+    substrate_with_board: "label (`review:*`) — board substrate is unused for this axis"
+    substrate_without_board: "label (`review:*`)"
+    values:
+      - human
+      - agent
+    values_project_specific: false
+    mutually_exclusive: true
+    default_inference_strategy: |
+      Not inferred — explicit opt-in per issue. The project default
+      (`review.mode:` in config.yaml) handles the dominant case; this
+      label exists for the per-issue exception.
+    required_on_every_issue: false
+    missing_severity: "[validation-severity:warning]"
+    wrong_value_severity: "[validation-severity:warning]"
+
+pr_type_mapping:
+  - issue_label_value: feature
+    pr_conv_type: feat
+  - issue_label_value: bug
+    pr_conv_type: fix
+  - issue_label_value: docs
+    pr_conv_type: docs
+  - issue_label_value: test
+    pr_conv_type: test
+  - issue_label_value: refactor
+    pr_conv_type: refactor
+  - issue_label_value: maintenance
+    pr_conv_type: chore
+    alternates: [ci]
+    notes: |
+      `chore` is the default; `ci` is acceptable when the maintenance
+      change is CI-specific (workflow files, runners, secrets).

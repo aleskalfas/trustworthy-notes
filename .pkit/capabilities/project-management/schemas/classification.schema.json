@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "classification.schema.json",
+  "title": "Classification axes (type, priority, workstream) + PR-type mapping",
+  "description": "Formal shape of classification.yaml — three classification axes the methodology mandates on every issue (type, priority, workstream), each with a substrate-with-board / substrate-without-board declaration, allowed values (or `values_project_specific: true` when the value set is open), default-at-filing behaviour, and severities for missing / wrong / duplicated. Plus the top-level `pr_type_mapping` that aligns the closing issue's `type:*` label with the PR title's Conventional Commits `<type>`. Consumed by create-issue (defaults + validation) and validate-body (cross-check classification at edit time). Companion per COR-018.",
+  "x-pkit-id-collection": "/axes",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "axes",
+    "pr_type_mapping"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "axes": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/$defs/entry"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Classification axes. Keys are axis ids (e.g., `type`, `priority`, `workstream`); values match $defs.entry."
+    },
+    "pr_type_mapping": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pr_type_mapping_entry" },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Bridges the issue-side `type:*` label to the PR-side Conventional Commits `<type>` prefix. One entry per recognised value; multi-issue PRs with mixed types pick the dominant value and warn."
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "substrate_with_board",
+        "substrate_without_board",
+        "values_project_specific",
+        "mutually_exclusive",
+        "required_on_every_issue",
+        "missing_severity",
+        "wrong_value_severity"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line description of what this axis classifies."
+        },
+        "substrate_with_board": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the axis lives when a Projects v2 board is configured — typically a single-select field on the board, or `label` when the axis must live as a label regardless."
+        },
+        "substrate_without_board": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Fallback substrate when no Projects v2 board exists — usually a `<axis>:*` label set."
+        },
+        "values": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Allowed values for this axis. Required when `values_project_specific: false`; omitted when `values_project_specific: true`."
+        },
+        "values_project_specific": {
+          "type": "boolean",
+          "description": "Whether the value set is open and adopter-defined. True for Workstream (project-specific); false for Type and Priority (methodology-fixed sets)."
+        },
+        "mutually_exclusive": {
+          "type": "boolean",
+          "description": "Whether at most one value of this axis may apply to a single issue. True for Type (`type:*` is single-valued); typically true for the others."
+        },
+        "default_value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Value the agent assigns at filing when the user doesn't specify (e.g., `priority:Medium`). Omitted for axes with no sensible default (e.g., Type — inferred from intent — and Workstream — inferred from file paths)."
+        },
+        "default_inference_strategy": {
+          "type": "string",
+          "minLength": 1,
+          "description": "When `default_value` is omitted, prose describing how the agent infers a value (e.g., `Type: inferred from filing intent — 'file a bug' → type:bug`; `Workstream: inferred from file paths or topic; agent asks if ambiguous`)."
+        },
+        "required_on_every_issue": {
+          "type": "boolean",
+          "description": "Whether every issue must carry this classification. True for all three axes in the methodology; sub-tasks and Milestones are exempt (they're not issues / are a separate primitive)."
+        },
+        "missing_severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity applied when an issue is filed/edited without this axis."
+        },
+        "wrong_value_severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity applied when an issue carries a value not in `values` (only meaningful when `values_project_specific: false`)."
+        },
+        "title_prefix_by_value": {
+          "type": "object",
+          "patternProperties": {
+            "^[a-z][a-z0-9-]*$": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false,
+          "description": "For the `type` axis: maps each kind value to the Task title prefix it carries at the issue level (per project-management:DEC-011-title-formats), e.g. `feature: Task`, `bug: Bug`. Read by create-issue / edit-issue / move-issue to keep the kind label and Task title prefix aligned."
+        },
+        "structural_restriction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "description",
+            "allowed_structural_types_per_kind",
+            "mismatch_severity"
+          ],
+          "properties": {
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Prose explaining which structural types each kind may take and why."
+            },
+            "allowed_structural_types_per_kind": {
+              "type": "object",
+              "patternProperties": {
+                "^[a-z][a-z0-9-]*$": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 },
+                  "uniqueItems": true
+                }
+              },
+              "additionalProperties": false,
+              "description": "Maps each kind value to the structural types it may take (per project-management:DEC-011-title-formats + DEC-004's hierarchy)."
+            },
+            "mismatch_severity": {
+              "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+              "description": "Severity when a kind is paired with a disallowed structural type."
+            }
+          },
+          "description": "For the `type` axis: restricts which structural types each kind value may take. Read by edit-issue / move-issue when validating Task-shape issues."
+        }
+      }
+    },
+    "pr_type_mapping_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issue_label_value", "pr_conv_type"],
+      "properties": {
+        "issue_label_value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Value of the issue's `type:*` label, e.g., `feature`, `bug`."
+        },
+        "pr_conv_type": {
+          "type": "string",
+          "pattern": "^[a-z]+$",
+          "description": "Conventional Commits `<type>` prefix the PR title carries (e.g., `feat`, `fix`)."
+        },
+        "alternates": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z]+$" },
+          "uniqueItems": true,
+          "description": "Other Conventional Commits prefixes acceptable for this issue label (e.g., `chore` may also be `ci` for CI-specific maintenance work)."
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional clarification."
+        }
+      }
+    }
+  }
+}

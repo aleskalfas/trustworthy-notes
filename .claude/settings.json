@@ -1,0 +1,105 @@
+{
+  "agent": "project-manager",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.pkit/adapters/claude-code/permission-hook.py"
+          }
+        ]
+      }
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "denyRead": [
+        "~/.ssh",
+        "~/.aws",
+        "~/.config/gh",
+        "~/.netrc"
+      ],
+      "allowWrite": [
+        "~/.cache/uv"
+      ]
+    },
+    "network": {
+      "allowUnixSockets": [
+        "/Users/kalfas/.1password/agent.sock"
+      ],
+      "allowedHosts": [
+        "api.github.com",
+        "api.anthropic.com"
+      ]
+    },
+    "excludedCommands": [
+      "gh"
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(.pkit/**/*.sh)",
+      "Bash(cat:*)",
+      "Bash(chmod +x:*)",
+      "Bash(cp:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker:*)",
+      "Bash(echo:*)",
+      "Bash(find:*)",
+      "Bash(gh:*)",
+      "Bash(git:*)",
+      "Bash(grep:*)",
+      "Bash(head:*)",
+      "Bash(jq:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)",
+      "Bash(pkit:*)",
+      "Bash(pwd)",
+      "Bash(ssh-keygen:*)",
+      "Bash(ssh:*)",
+      "Bash(tail:*)",
+      "Edit",
+      "Glob",
+      "Grep",
+      "MultiEdit",
+      "Read",
+      "Skill(adapter-author)",
+      "Skill(agent-author)",
+      "Skill(area-author)",
+      "Skill(capability-author)",
+      "Skill(decision-author)",
+      "Skill(evidence)",
+      "Skill(migration-author)",
+      "Skill(pm)",
+      "Skill(schema)",
+      "Skill(scratchpad-author)",
+      "Skill(storyboard-author)",
+      "Skill(update-config)",
+      "WebFetch",
+      "WebSearch",
+      "Write"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm --recursive:*)",
+      "Bash(rm -R:*)",
+      "Bash(rm -Rf:*)",
+      "Bash(rm -fR:*)",
+      "Bash(rm -fr:*)",
+      "Bash(rm -r:*)",
+      "Bash(rm -rf $HOME:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf ~:*)",
+      "Bash(rm -rf:*)",
+      "Bash(sudo:*)"
+    ]
+  }
+}

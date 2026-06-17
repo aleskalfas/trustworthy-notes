@@ -1,0 +1,321 @@
+# DRY RUN — hand-built notes for printed p.3, under METHODOLOGY's model.
+# Normalized form: evidence is stored ONCE in `evidence:`; statements reference
+# records by id. All evidence here is kind=text (default); figure/table are
+# reserved (no figures on this page). Every excerpt is a verbatim span verified
+# to resolve against the real ingest output.
+# Q1 RESOLVED (type/basis split); Q2 RESOLVED (lists = parent + atomic children);
+# Q3 (aims/scope type) still flagged inline.
+
+schema_version: 1
+
+source:
+  scope: page          # this is an intermediate per-page set (METHODOLOGY §4.6)
+  document: "McCorquodale 2013, Representations of the Family in the Egyptian Old Kingdom (BAR 2513)"
+  page_label: "3"
+  page_index: 13
+
+terms:
+  - id: t-polygamy
+    label: "polygamy"
+  - id: t-marriage
+    label: "marriage"
+  - id: t-annuity-contract
+    label: "annuity contract (sẖ n sꜥnḫ)"
+  - id: t-consanguineous-marriage
+    label: "consanguineous marriage"
+  # OBSERVATION: p.3 never *defines* these — "annuity contract (sẖ n sꜥnḫ)" is a
+  # parenthetical gloss, not a definition. Zero statements of type `definition`.
+
+evidence:
+  - id: e-study-subjects
+    excerpt: |-
+      The subjects of this study are the female members of the
+      Old Kingdom family and the institution of marriage.
+    source: body
+  - id: e-data-material
+    excerpt: |-
+      The data available for this study are the reliefs, paintings,
+      inscriptions and statuary of the tombs of the elite
+      bureaucrats who controlled the country’s administration.
+    source: body
+  - id: e-basic-aim
+    excerpt: |-
+      The basic aim of the study is to examine this material and
+      other data relating to the female relatives of these
+      officials in order to identify the place of wives and other
+      females in the tomb owner’s family and to arrive at an
+      understanding of the institution of marriage in the Old
+      Kingdom.
+    source: body
+  - id: e-king-wives
+    excerpt: "Although it is established that the king customarily had a number of wives"
+    source: body
+  - id: e-polygamy-aim
+    excerpt: "The latter aim involves the issue of polygamy."
+    source: body
+  - id: e-officials-unclear
+    excerpt: "it is less clear whether officials adopted this practice."
+    source: body
+  - id: e-polygamy-motivation
+    excerpt: |-
+      However, ambiguous reliefs and
+      inscriptions in a number of tomb chapels and the high
+      death rate from childbirth that must be assumed for
+      married women require investigation of this question.
+    source: body
+  - id: e-investigation-list
+    excerpt: |-
+      investigating the iconography of female figures
+      labelled as wives, mothers and sisters
+       identifying unlabelled female figures
+       analysing each instance of more than one wife shown,
+      in order to determine whether it is an example of
+      polygamy or a case of consecutive wives
+       analysing instances where more than one ‘eldest
+      child’ is shown in order to determine whether they
+      were twins, whether one child died prematurely, or
+      whether they were children of contemporary or
+      consecutive wives
+       analysing instances where a child is described as ‘her
+      son/her daughter’ to determine whether the child is
+      from a previous marriage of the mother or whether it
+      indicates that the tomb-owner-father had children by
+      another wife
+       investigating possible cases of consanguineous
+      marriages.
+    source: body
+  # per-task sub-spans of the list above (each is a verbatim slice):
+  - id: e-task-iconography
+    excerpt: "investigating the iconography of female figures labelled as wives, mothers and sisters"
+    source: body
+  - id: e-task-unlabelled
+    excerpt: "identifying unlabelled female figures"
+    source: body
+  - id: e-task-multiple-wives
+    excerpt: >-
+      analysing each instance of more than one wife shown, in order to determine
+      whether it is an example of polygamy or a case of consecutive wives
+    source: body
+  - id: e-task-eldest-child
+    excerpt: >-
+      analysing instances where more than one ‘eldest child’ is shown in order to
+      determine whether they were twins, whether one child died prematurely, or
+      whether they were children of contemporary or consecutive wives
+    source: body
+  - id: e-task-her-child
+    excerpt: >-
+      analysing instances where a child is described as ‘her son/her daughter’ to
+      determine whether the child is from a previous marriage of the mother or
+      whether it indicates that the tomb-owner-father had children by another wife
+    source: body
+  - id: e-task-consanguineous
+    excerpt: "investigating possible cases of consanguineous marriages."
+    source: body
+  - id: e-studies-skew
+    excerpt: |-
+      While a number of general studies have been made on the
+      role of women, they tend to focus on the Middle and New
+      Kingdom where more literary evidence is available.
+    source: body
+  - id: e-studies-list
+    excerpt: |-
+      These include studies by Gay Robins, Watterson,
+      Tyldesley, Lesko and Hawass.
+    source: body
+  - {id: e-fn-robins,    excerpt: "Robins (1993).",    source: footnote, locator: "1"}
+  - {id: e-fn-watterson, excerpt: "Watterson (1991).", source: footnote, locator: "2"}
+  - {id: e-fn-tyldesley, excerpt: "Tyldesley (1994).", source: footnote, locator: "3"}
+  - {id: e-fn-lesko,     excerpt: "Lesko (1996).",     source: footnote, locator: "4"}
+  - {id: e-fn-hawass,    excerpt: "Hawass (1995).",    source: footnote, locator: "5"}
+  - id: e-late-contracts
+    excerpt: |-
+      Some refer to evidence from the Late or
+      Ptolemaic period, such as the so-called marriage or
+      annuity contracts (sẖ n sꜥnḫ) from this period.
+    source: body
+  - id: e-no-ok-docs
+    excerpt: |-
+      Documentary sources of this type do not exist from the
+      Old Kingdom.
+    source: body
+  - id: e-inheritance
+    excerpt: |-
+      There are a few instances where
+      inscriptions in tombs refer to the inheritance of property
+      but they are so infrequent, that they probably refer to an
+      atypical situation.
+    source: body
+  - {id: e-fn-tehna, excerpt: "For example, the provincial tomb of Nj-kꜣ.[j]-ꜥnḫ at Tehna.", source: footnote, locator: "9"}
+  - id: e-bryant-quote
+    excerpt: |-
+      ‘Oddly, marriage
+      did not exist as a legal state in ancient Egypt. Marriages
+      were economic and procreative unions that were often
+      monogamous, enduring, loving. There was no marriage
+      ceremony, however.’
+    source: body
+  - {id: e-bryant-attribution, excerpt: "Bryant in Capel–Markoe (1996: 36).", source: footnote, locator: "11"}
+  - id: e-johnson-quote
+    excerpt: |-
+      ‘There is no
+      evidence for any legal or religious ceremony establishing
+      the marriage, although probably a party was held.’
+    source: body
+  - {id: e-johnson-attribution, excerpt: "Johnson in Capel–Markoe (1996: 179).", source: footnote, locator: "12"}
+
+statements:
+  # ---- §1.1 What the study is about (Q3 LIVE: typed `method`; could be a
+  # dedicated `document-structure`/`aim` type) ----
+  - id: s-study-subjects
+    type: method
+    text: >-
+      The study's subjects are the female members of the Old Kingdom family and
+      the institution of marriage.
+    terms: [t-marriage]
+    evidence: [e-study-subjects]
+
+  - id: s-data-material
+    type: method
+    text: >-
+      The evidence base is the reliefs, paintings, inscriptions and statuary
+      from the tombs of elite bureaucrats who ran the administration.
+    evidence: [e-data-material]
+
+  - id: s-basic-aim
+    type: question
+    text: >-
+      The aim is to identify the place of wives and other females in the tomb
+      owner's family and to understand the institution of marriage.
+    terms: [t-marriage]
+    evidence: [e-basic-aim]
+
+  # ---- The polygamy thread — ATOMICITY: three ideas, three notes, linked ----
+  - id: s-king-polygamy
+    type: background
+    text: "It is established that the king customarily had a number of wives."
+    terms: [t-polygamy]
+    evidence: [e-king-wives]
+
+  - id: s-officials-polygamy-open
+    type: question
+    text: "It is unclear whether Old Kingdom officials also practised polygamy."
+    terms: [t-polygamy]
+    evidence: [e-polygamy-aim, e-officials-unclear]
+
+  - id: s-polygamy-motivation
+    type: background
+    text: >-
+      Ambiguous reliefs and inscriptions in several tomb chapels, plus the high
+      childbirth death rate assumed for married women, motivate the question.
+    evidence: [e-polygamy-motivation]
+
+  # ---- §1.2 The investigation tasks — Q2 RESOLVED (hybrid): a parent note for
+  # the set, plus one atomic child per task, each linked child --elaborates--> parent.
+  - id: s-investigation
+    type: method
+    text: "The investigation comprises six analytical tasks."
+    evidence: [e-investigation-list]
+
+  - id: s-task-iconography
+    type: method
+    text: "Read the iconography of female figures labelled as wives, mothers and sisters."
+    evidence: [e-task-iconography]
+
+  - id: s-task-unlabelled
+    type: method
+    text: "Identify unlabelled female figures."
+    evidence: [e-task-unlabelled]
+
+  - id: s-task-multiple-wives
+    type: method
+    text: >-
+      Analyse each multiple-wife scene to decide whether it shows polygamy or
+      consecutive wives.
+    terms: [t-polygamy]
+    evidence: [e-task-multiple-wives]
+
+  - id: s-task-eldest-child
+    type: method
+    text: >-
+      Analyse cases of more than one 'eldest child' (twins, a child who died
+      prematurely, or children of contemporary/consecutive wives).
+    evidence: [e-task-eldest-child]
+
+  - id: s-task-her-child
+    type: method
+    text: >-
+      Analyse 'her son/her daughter' descriptions (a previous marriage of the
+      mother, or the father's children by another wife).
+    evidence: [e-task-her-child]
+
+  - id: s-task-consanguineous
+    type: method
+    text: "Investigate possible consanguineous marriages."
+    terms: [t-consanguineous-marriage]
+    evidence: [e-task-consanguineous]
+
+  # ---- §1.3 The literature and the evidence picture ----
+  - id: s-studies-skew-later
+    type: claim
+    text: >-
+      Existing general studies of women's roles tend to focus on the Middle and
+      New Kingdom, where more literary evidence survives.
+    evidence: [e-studies-skew]
+
+  - id: s-studies-coverage
+    type: background
+    text: >-
+      Studies by Robins, Watterson, Tyldesley, Lesko and Hawass cover social and
+      legal status, occupations, marriage, health, dress, domestic life, royal
+      women and images of women.
+    terms: [t-marriage]
+    evidence: [e-studies-list, e-fn-robins, e-fn-watterson, e-fn-tyldesley, e-fn-lesko, e-fn-hawass]
+
+  # Q1 RESOLVED: type=claim, basis=author (the author's own assertion about the
+  # evidence record — not from her own data, not reported).
+  - id: s-no-ok-contracts
+    type: claim
+    text: >-
+      Documentary marriage/annuity contracts (sẖ n sꜥnḫ) survive from the Late
+      and Ptolemaic periods, but no such documentary sources exist from the Old
+      Kingdom.
+    terms: [t-annuity-contract]
+    evidence: [e-late-contracts, e-no-ok-docs]
+
+  - id: s-inheritance-atypical
+    type: claim
+    text: >-
+      A few Old Kingdom tomb inscriptions mention inheritance of property, but
+      they are so infrequent they probably reflect atypical situations.
+    evidence: [e-inheritance, e-fn-tehna]
+
+  - id: s-bryant-no-legal-marriage
+    type: claim
+    basis: reported
+    text: >-
+      Bryant argues marriage was not a legal state in ancient Egypt; marriages
+      were economic and procreative unions, often monogamous, with no ceremony.
+    terms: [t-marriage]
+    evidence: [e-bryant-quote, e-bryant-attribution]
+
+  - id: s-johnson-no-ceremony
+    type: claim
+    basis: reported
+    text: >-
+      Johnson states there is no evidence for any legal or religious ceremony
+      establishing a marriage, though a party was probably held.
+    terms: [t-marriage]
+    evidence: [e-johnson-quote, e-johnson-attribution]
+
+relations:
+  - {from: s-polygamy-motivation, to: s-officials-polygamy-open, type: motivates}
+  - {from: s-king-polygamy, to: s-officials-polygamy-open, type: contrasts}
+  - {from: s-johnson-no-ceremony, to: s-bryant-no-legal-marriage, type: supports}
+  - {from: s-investigation, to: s-basic-aim, type: elaborates}
+  # the six tasks elaborate the parent investigation note:
+  - {from: s-task-iconography, to: s-investigation, type: elaborates}
+  - {from: s-task-unlabelled, to: s-investigation, type: elaborates}
+  - {from: s-task-multiple-wives, to: s-investigation, type: elaborates}
+  - {from: s-task-eldest-child, to: s-investigation, type: elaborates}
+  - {from: s-task-her-child, to: s-investigation, type: elaborates}
+  - {from: s-task-consanguineous, to: s-investigation, type: elaborates}

@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "body-format.schema.json",
+  "title": "Issue-body shape per type + universal body rules + checkbox semantics",
+  "description": "Formal shape of body-format.yaml — per-issue-type required sections (with checkbox flags and severity), the universal body rules (first-line parent ref, no h1, no file:line, no implementation recipes, no predicted decision IDs), the optional `Integration:` pre-line shape, the checkbox semantics (validated at tick, hard-stop at close, sticky ticks, two kinds: inline + issue-reference), and the sub-task promotion procedure. Consumed by the create-issue and validate-body skills at filing and edit time. Companion per COR-018.\n\nKey constraint: `bodies` keys are kebab-case issue-type ids drawn from issue-types.yaml's `types` namespace.",
+  "x-pkit-id-collection": "/bodies",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "bodies",
+    "universal_body_rules",
+    "integration_marker",
+    "checkbox_rules",
+    "sub_task_promotion"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "bodies": {
+      "type": "object",
+      "x-pkit-keys-from-namespace": "issue-types",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/$defs/entry"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Per-issue-type body shape. Keys are issue-type ids; values match $defs.entry."
+    },
+    "universal_body_rules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/universal_rule" },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Rules every issue body must satisfy regardless of type. Each rule is tagged with a severity."
+    },
+    "integration_marker": {
+      "$ref": "#/$defs/integration_marker_block",
+      "description": "Shape and semantics of the optional `Integration: integration/<slug>` pre-line that the agent stamps and removes on owning-issue designation."
+    },
+    "checkbox_rules": {
+      "$ref": "#/$defs/checkbox_rules_block",
+      "description": "Checkbox semantics: when validation happens (tick time), how closure is gated, which two ticked-states the rule recognises."
+    },
+    "sub_task_promotion": {
+      "$ref": "#/$defs/sub_task_promotion_block",
+      "description": "Mechanics of promoting a markdown sub-task to a standalone Task."
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_sections"],
+      "properties": {
+        "required_sections": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/required_section" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Sections the body must contain, in any order. Each carries a `## <Name>` heading."
+        },
+        "optional_section_recommendations": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^## .+$", "minLength": 4 },
+          "uniqueItems": true,
+          "description": "Section headings templates may add beyond the minimum. Not enforced; the floor is `required_sections`. Common entries: `## Why`, `## Out of scope`, `## Related`, `## Dependencies`, `## Approach`, `## Implementation notes`."
+        }
+      },
+      "description": "Per-issue-type body shape."
+    },
+    "required_section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["heading", "purpose", "has_checkboxes", "severity"],
+      "properties": {
+        "heading": {
+          "type": "string",
+          "pattern": "^## .+$",
+          "minLength": 4,
+          "description": "Exact section heading, including the leading `## ` and a space."
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line description of what this section captures."
+        },
+        "has_checkboxes": {
+          "type": "boolean",
+          "description": "Whether the section is expected to carry checkboxes that participate in the close-gate per checkbox_rules."
+        },
+        "severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity applied if the section is missing or empty at filing/edit time."
+        }
+      },
+      "description": "One required section."
+    },
+    "universal_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "severity"],
+      "properties": {
+        "rule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Plain-prose statement of the rule, written so the skill's error message can quote it verbatim."
+        },
+        "severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity applied on violation."
+        }
+      }
+    },
+    "integration_marker_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern", "position", "agent_managed", "removal_authorisation_severity"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Regex the marker line must match. `<slug>` is captured."
+        },
+        "position": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where in the body the line sits — above the parent-ref first line, no blank line between."
+        },
+        "agent_managed": {
+          "type": "boolean",
+          "description": "Whether the agent owns stamping and removal of this line (humans don't edit it directly)."
+        },
+        "removal_authorisation_severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity applied when a human removes the marker without author authorisation (MET-008 scope-change rule)."
+        }
+      }
+    },
+    "checkbox_rules_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validation_timing", "close_gate_severity", "ticked_boxes_sticky", "two_kinds"],
+      "properties": {
+        "validation_timing": {
+          "type": "string",
+          "minLength": 1,
+          "description": "When the actor's claim behind a checkbox is verified. Methodology choice: at tick time, by the actor doing the ticking; never re-validated at close."
+        },
+        "close_gate_severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity applied when an issue with unticked checkboxes is asked to transition to Done. The methodology's hard stop."
+        },
+        "ticked_boxes_sticky": {
+          "type": "boolean",
+          "description": "Whether un-ticking a previously-ticked box requires an explicit comment explaining the regression."
+        },
+        "two_kinds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inline_claim", "issue_reference"],
+          "properties": {
+            "inline_claim": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["pattern_example", "ticked_by"],
+              "properties": {
+                "pattern_example": { "type": "string", "minLength": 1 },
+                "ticked_by": { "type": "string", "minLength": 1 }
+              }
+            },
+            "issue_reference": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["pattern_example", "ticked_by"],
+              "properties": {
+                "pattern_example": { "type": "string", "minLength": 1 },
+                "ticked_by": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "sub_task_promotion_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "new_task_parent_rule", "original_task_body_update"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "When promotion happens — sub-task needs its own PR, owner, discussion, or labels."
+        },
+        "new_task_parent_rule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Parent of the promoted Task. Per MET-009: the original Task's parent, not the original Task itself."
+        },
+        "original_task_body_update": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What changes in the original Task's body. The plain checkbox becomes a task-list reference (`- [ ] #<N> <text>`); GitHub auto-ticks it when the new Task closes."
+        }
+      }
+    }
+  }
+}

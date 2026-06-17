@@ -1,0 +1,1 @@
+../../../.pkit/capabilities/project-management/skills/pm/batch-plan.md

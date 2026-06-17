@@ -1,0 +1,1 @@
+../../../.pkit/skills/core/schema/schema.md

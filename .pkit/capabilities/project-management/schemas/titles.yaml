@@ -1,0 +1,188 @@
+# Title formats per surface (issue, milestone, PR).
+#
+# One entry per surface — the four issue types each have their own
+# `[Type]`-prefixed format, Milestones are free-form (recommendations
+# only), PRs use Conventional Commits. The split is deliberate per
+# MET-010: issue titles are read on boards (need structural-role at a
+# glance); PR titles are read in `git log` (need Conventional Commits
+# for tooling).
+#
+# Consumed by the create-issue skill (title generation at filing) and
+# the validate-body skill (title check at filing + edit time).
+
+schema_version: 1
+
+source:
+  upstream: pm-workflow
+  commit: 9d1f0237f5d5778ed9811c72f22ae8268e5faff3
+  decisions: [MET-010]
+  captured_at: 2026-05-21
+
+formats:
+  issue-epic:
+    surface_kind: issue
+    applies_to_issue_type: "[issue-types:epic]"
+    pattern: '^\[EPIC\] .+$'
+    description: |
+      `[EPIC] <plain English sentence>`. `EPIC` is all-caps. The
+      sentence is plain English, imperative or descriptive — written
+      for a human browsing the board, not for git history. No
+      `scope:` colon prefix; no Conventional Commits formatting.
+    examples_good:
+      - "[EPIC] Human user can replace AI user in the sandbox"
+      - "[EPIC] Migrate the legacy work-tracker into Projects v2"
+    examples_bad:
+      - title: "[Epic] Human user can replace AI user"
+        reason: "`Epic` is title-case; EPIC must be all-caps."
+      - title: "[EPIC] sandbox: human replaces AI user"
+        reason: "Contains `scope:` colon prefix; that shape is reserved for PRs."
+      - title: "feat(epic): human user replaces AI user"
+        reason: "Conventional Commits format is reserved for PRs."
+    validations:
+      - rule: "Title starts with `[EPIC] ` (all-caps EPIC, single space after bracket)."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title contains no `<word>:` scope prefix after the bracket."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title does not match a Conventional Commits pattern (`type(scope):` or `type:`)."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title length is at least ~30 chars after the `[EPIC] ` prefix."
+        severity: "[validation-severity:warning]"
+
+  issue-feature:
+    surface_kind: issue
+    applies_to_issue_type: "[issue-types:feature]"
+    pattern: '^\[Feature\] .+$'
+    description: |
+      `[Feature] <plain English sentence>`. `Feature` is title-case.
+      Same plain-English rules as EPIC titles.
+    examples_good:
+      - "[Feature] Persona harness with three-channel session model"
+      - "[Feature] Single-command branch open and PR auto-create"
+    examples_bad:
+      - title: "[feature] persona harness"
+        reason: "`feature` must be title-case (`Feature`)."
+      - title: "feat(harness): persona harness three-channel"
+        reason: "Conventional Commits format is reserved for PRs."
+    validations:
+      - rule: "Title starts with `[Feature] ` (title-case, single space after bracket)."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title contains no `<word>:` scope prefix after the bracket."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title does not match a Conventional Commits pattern."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title length is at least ~30 chars after the `[Feature] ` prefix."
+        severity: "[validation-severity:warning]"
+
+  issue-umbrella:
+    surface_kind: issue
+    applies_to_issue_type: "[issue-types:umbrella]"
+    pattern: '^\[Umbrella\] .+$'
+    description: |
+      `[Umbrella] <plain English sentence>`. `Umbrella` is title-case.
+    examples_good:
+      - "[Umbrella] Consumer walkthrough polish fixes"
+      - "[Umbrella] Migration tooling improvements"
+    examples_bad:
+      - title: "[Umbrella] CLI: polish round"
+        reason: "Contains `scope:` colon prefix; reserved for PRs."
+    validations:
+      - rule: "Title starts with `[Umbrella] ` (title-case, single space after bracket)."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title contains no `<word>:` scope prefix after the bracket."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title does not match a Conventional Commits pattern."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title length is at least ~30 chars after the `[Umbrella] ` prefix."
+        severity: "[validation-severity:warning]"
+
+  issue-task:
+    surface_kind: issue
+    applies_to_issue_type: "[issue-types:task]"
+    pattern: '^\[(Task|Bug|Docs|Test|Refactor|Chore)\] .+$'
+    description: |
+      `[<Kind-Prefix>] <plain English sentence>`. The prefix matches
+      the Task's kind label per [classification:axes.type.title_prefix_by_value]:
+      `[Task]` for kind=feature, `[Bug]` for kind=bug, `[Docs]` for
+      kind=docs, `[Test]` for kind=test, `[Refactor]` for
+      kind=refactor, `[Chore]` for kind=maintenance. The kind label
+      and the title prefix are kept in sync by the agent at filing
+      time; mismatch is hard-reject at validate.
+    examples_good:
+      - "[Task] Install the Claude Code CLI inside the sandbox image"
+      - "[Bug] Fix pkit install capability self-host destroys source tree"
+      - "[Docs] Expand .pkit/cli/README.md into a CLI authoring manual"
+      - "[Test] Add coverage for the schemas-bindings resolver fallback"
+      - "[Refactor] Replace CapabilityDispatchGroup caching with stateless lookup"
+      - "[Chore] Bump backbone to v1.30.0 ahead of release-management capability"
+    examples_bad:
+      - title: "[Task] interaction-gateway: support IGW_PROMPT_FILE"
+        reason: "Contains `scope:` colon prefix; reserved for PRs."
+      - title: "feat(igw): add prompt-file support"
+        reason: "Conventional Commits format is reserved for PRs."
+      - title: "[Task] Fix the auth bug"
+        reason: "Title prefix doesn't match kind. A `type:bug` Task uses `[Bug]`, not `[Task]`."
+      - title: "[Task] add CLI"
+        reason: "Too terse — passes the regex but fails the soft 30-char rule."
+    validations:
+      - rule: "Title starts with one of the kind-driven prefixes (`[Task]`, `[Bug]`, `[Docs]`, `[Test]`, `[Refactor]`, `[Chore]`) with a single space after the bracket."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title prefix matches the issue's kind label per classification.yaml's `title_prefix_by_value` map."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title contains no `<word>:` scope prefix after the bracket."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title does not match a Conventional Commits pattern."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Title length is at least ~30 chars after the prefix."
+        severity: "[validation-severity:warning]"
+
+  milestone:
+    surface_kind: milestone
+    pattern: null
+    description: |
+      Milestones are a separate GitHub primitive with no `[Type]`
+      prefix. Recommended shape: short purpose-based name, optionally
+      with an `M<n>` sort prefix (e.g., `M1 — CLI walkthrough
+      complete`, `Q2 2026 release`, `v0.2 GA`). Pure numeric names
+      (`M1`, `M2`) without semantic content are discouraged.
+    examples_good:
+      - "M1 — CLI walkthrough complete"
+      - "Q2 2026 release"
+      - "v0.2 GA"
+    examples_bad:
+      - title: "M1"
+        reason: "Pure numeric name with no semantic content; reader can't tell what the milestone covers."
+    validations:
+      - rule: "Title contains at least one alphabetic word beyond a numeric sort prefix (so `M1 — Foo` passes; `M1` alone is flagged)."
+        severity: "[validation-severity:warning]"
+
+  pr:
+    surface_kind: pr
+    pattern: '^(feat|fix|docs|test|refactor|chore|ci)(\([^)]+\))?: .+$'
+    description: |
+      Conventional Commits: `<type>(<scope>): <summary>`. `<type>`
+      matches the closing Task's `type:*` label per the
+      classification.yaml mapping. `<scope>` is recommended but not
+      mandated; omit when the change is cross-cutting. `<summary>` is
+      short (~50 chars), imperative mood, lowercase, no trailing
+      period. Multi-issue PRs pick the dominant type and surface a
+      warning if the closing issues' types disagree.
+    examples_good:
+      - "feat(sandbox): install Claude Code CLI"
+      - "fix(tui): render playback cleanly without Ctrl-L"
+      - "docs(readme): add quickstart section"
+    examples_bad:
+      - title: "[Task] Install the Claude Code CLI inside the sandbox image"
+        reason: "Issue-title format is reserved for issues; PRs use Conventional Commits."
+      - title: "Sandbox: install Claude Code CLI"
+        reason: "Capital letter and missing Conventional Commits `<type>` prefix."
+      - title: "feat: Install CLI."
+        reason: "Trailing period and non-imperative capitalisation; soft conventions, warning-level."
+    validations:
+      - rule: "Title matches the Conventional Commits regex (`<type>(<scope>)?: <summary>`)."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "`<type>` matches the closing Task's `type:*` label per classification.yaml's `pr_type_mapping`. Multi-issue PRs with mixed types warn instead."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "`<summary>` is lowercase and has no trailing period."
+        severity: "[validation-severity:warning]"
+      - rule: "`<summary>` is ~50 chars or shorter."
+        severity: "[validation-severity:warning]"

@@ -1,0 +1,17 @@
+# Workstreams for project-kit (per [project-management:DEC-018-workstream-taxonomy-and-lifecycle]).
+# Single-product project — workstreams are sub-areas of the methodology.
+
+schema_version: 1
+
+workstreams:
+  - capabilities
+  - schemas
+  - cli
+  - decisions
+  - workflow
+  - adapters
+  - agents
+  - skills
+  - lifecycle
+  - evidence
+  - tests

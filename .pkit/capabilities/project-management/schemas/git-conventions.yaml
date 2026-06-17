@@ -1,0 +1,193 @@
+# Branch naming + PR body + merge + force-push policy.
+#
+# One entry per git-surface convention. Branch names follow
+# `<conv-type>/<issue-number>-<slug>`; PR bodies require a
+# `Closes #N` reference; merges are squash-with-delete-branch (one PR →
+# one commit on the base branch); force-push is allowed before review
+# and forbidden after. Plus the optional, owner-designated integration-
+# branch construct for outcomes that assemble several Tasks before
+# promoting to `main`.
+#
+# Consumed by the create-issue skill (derive branch name from Task
+# title + `type:*` label), the PR-open path (validate base branch +
+# body shape), and the transition-state skill (gate merge against the
+# checkbox-completeness check).
+
+schema_version: 1
+
+source:
+  upstream: pm-workflow
+  commit: 9d1f0237f5d5778ed9811c72f22ae8268e5faff3
+  decisions: [MET-012]
+  captured_at: 2026-05-21
+
+conventions:
+  branch-name:
+    surface_kind: branch
+    pattern: '^(feat|fix|docs|test|refactor|chore|ci)/[0-9]+-[a-z0-9][a-z0-9-]*$'
+    description: |
+      `<conv-type>/<issue-number>-<slug>`. `<conv-type>` is the
+      Conventional Commits prefix derived from the closing Task's
+      `type:*` label per `classification.yaml`'s `pr_type_mapping`.
+      `<issue-number>` is the Task's GitHub issue number;
+      `<slug>` is the kebab-case derivation of the issue title (see
+      `branch_slug_derivation`). One branch per Task; EPIC, Feature,
+      Umbrella, Milestone, and sub-tasks do not get branches.
+    examples_good:
+      - "feat/99-install-the-claude-code-cli-inside-the-sandbox"
+      - "fix/77-render-tui-playback-cleanly-without-ctrl-l"
+    examples_bad:
+      - example: "feature/99-install-cli"
+        reason: "`feature` should be `feat` (Conventional Commits prefix)."
+      - example: "feat/install-the-cli"
+        reason: "Missing issue number."
+      - example: "Feat/99-install-cli"
+        reason: "Uppercase letters; the convention is lowercase throughout."
+    rules:
+      - rule: "Branch name matches the pattern (`<conv-type>/<N>-<slug>`)."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "`<conv-type>` matches the Task's `type:*` label per the pr_type_mapping in classification.yaml."
+        severity: "[validation-severity:hard-reject]"
+
+  base-branch:
+    surface_kind: base-branch
+    pattern: null
+    description: |
+      Default base is `main`; projects may configure a different
+      default. Tasks whose closing issue carries an `Integration:`
+      marker target the named integration branch instead — see the
+      top-level `integration_branches` block.
+    rules:
+      - rule: "PR base is `main` unless an integration marker is set, in which case it must be `integration/<slug>`."
+        severity: "[validation-severity:hard-reject]"
+
+  pr-body:
+    surface_kind: pr-body
+    pattern: null
+    description: |
+      PR body must reference every Task it closes via `Closes #N`,
+      `Fixes #N`, or `Resolves #N`. Recommended first line of the
+      body — mirrors the issue-body parent-ref so linkage is visible
+      without scrolling past the summary. Recommended (not required)
+      sections: short description (why/how, 1–3 paragraphs),
+      `## Test plan` (checkboxes per MET-006), `## Doc impact`
+      mirroring what was done. Forbidden: pasted issue-body content;
+      Conventional Commits format duplicated in a body header.
+    rules:
+      - rule: "PR body contains at least one `Closes #N` / `Fixes #N` / `Resolves #N` reference."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "PR body contains a `## Doc impact` section."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "PR body does not paste content already in the closing issue's body."
+        severity: "[validation-severity:warning]"
+      - rule: |
+          A required PR checkbox section (`## Test plan`) with zero authored items
+          signals an unedited PR template skeleton. At the merge gate (`done-work`)
+          this is a hard-reject; at open it is a warning. A trailing empty `- [ ]`
+          alongside real authored items is tolerated (lenient). Per DEC-031.
+        severity: "[validation-severity:hard-reject]"
+        name: "body.placeholder.empty-checkbox-section"
+      - rule: |
+          Surviving PR.md template placeholder prose (text derived at runtime from
+          `templates/PR.md` that still appears verbatim in the body) signals an
+          unedited PR skeleton. Always a warning. Per DEC-031.
+        severity: "[validation-severity:warning]"
+        name: "body.placeholder.template-prose"
+
+  merge:
+    surface_kind: merge
+    pattern: null
+    description: |
+      Squash-merge with `--delete-branch`. Equivalent to
+      `gh pr merge --squash --delete-branch`. Squash-commit subject =
+      PR title (Conventional Commits); squash-commit body = PR body
+      (preserves context in `git log`). No merge-commits,
+      no rebase-merge, no manual cherry-picks — one PR maps to one
+      commit on the base branch.
+    rules:
+      - rule: "Merge uses squash-with-delete-branch; no merge-commits."
+        severity: "[validation-severity:hard-reject]"
+
+  force-push:
+    surface_kind: force-push
+    pattern: null
+    description: |
+      Allowed on feature branches before first review (useful for
+      tidying history). Forbidden after a human review lands —
+      invalidates the reviewer's context. Forbidden on `main` and any
+      shared branch (including integration branches) with no
+      exceptions. `--no-verify` is not used unless the user explicitly
+      authorises it (matches the audit-trail discipline elsewhere).
+    rules:
+      - rule: "Force-push on `main` or any shared branch (including `integration/*`) is refused."
+        severity: "[validation-severity:hard-reject]"
+      - rule: "Force-push on a feature branch after a human review has landed is refused without bypass."
+        severity: "[validation-severity:bypassable-with-audit]"
+      - rule: "`--no-verify` on commits or pushes is refused without user authorisation."
+        severity: "[validation-severity:bypassable-with-audit]"
+
+branch_slug_derivation:
+  steps:
+    - "Drop the `[Type]` prefix."
+    - "Lowercase the remainder."
+    - "Replace whitespace and non-alphanumeric chars with hyphens."
+    - "Collapse consecutive hyphens."
+    - "Truncate at a word boundary to ~50 chars."
+    - "Strip leading and trailing hyphens."
+  examples:
+    - title: "[Task] Install the Claude Code CLI inside the sandbox image"
+      type_prefix: feat
+      issue_number: 99
+      branch_name: "feat/99-install-the-claude-code-cli-inside-the-sandbox"
+    - title: "[Task] Render TUI playback cleanly without Ctrl-L"
+      type_prefix: fix
+      issue_number: 77
+      branch_name: "fix/77-render-tui-playback-cleanly-without-ctrl-l"
+
+multi_issue_pr_rules:
+  allowed: true
+  rules:
+    - rule: "All closing issues share the same parent (Feature, Umbrella, or EPIC)."
+      severity: "[validation-severity:hard-reject]"
+    - rule: "All closing issues have compatible `type:*` labels; disagreements warn and the PR's `<type>` uses the dominant value."
+      severity: "[validation-severity:warning]"
+    - rule: "PR body explicitly lists every keyword (e.g., `Closes #42, closes #43`)."
+      severity: "[validation-severity:hard-reject]"
+
+integration_branches:
+  opt_in: true
+  owner_types:
+    - "[issue-types:epic]"
+    - "[issue-types:feature]"
+    - "[issue-types:umbrella]"
+  branch_name_pattern: '^integration/[a-z0-9][a-z0-9-]*$'
+  designation_marker_pattern: '^Integration: integration/([a-z0-9][a-z0-9-]*)$'
+  designation_position: |
+    First line of the owning issue's body, above the parent-ref. The
+    body-format schema's `integration_marker` block declares the
+    same shape — this entry is the git-side view.
+  propagation_rule: |
+    On designation, the agent walks the owning issue's sub-issue tree
+    and stamps the same `Integration: integration/<slug>` line at the
+    top of every descendant's body. Descendants filed later inherit
+    the line at creation while the owning issue remains designated.
+    Removing the marker from a descendant is a scope-changing edit
+    (author authorisation required per MET-008).
+  pr_target_rule:
+    target_when_marked: |
+      When a marked descendant's PR opens, the PR's base branch is
+      `integration/<slug>` (not `main`). The agent reads the body's
+      `Integration:` line to determine the base. Targeting `main`
+      while the marker is present requires an audit-trail bypass —
+      cleaner off-ramp is to remove the marker first (author-authorised).
+    bypass_severity: "[validation-severity:bypassable-with-audit]"
+  closure_path: |
+    Marked descendants close on merge into `integration/<slug>` via
+    `Closes #N` (same trigger as for `main`, different base). Cascade
+    runs on each descendant close. The owning issue becomes
+    eligible-to-close when every marked descendant closes; the final
+    closure is a separate `integration/<slug>` → main PR with
+    `Closes #<owning>` in the body — squash-merged with
+    `--delete-branch`. Merging that PR closes the owning issue and
+    triggers any further ancestor cascade.
+  force_push_allowed: false

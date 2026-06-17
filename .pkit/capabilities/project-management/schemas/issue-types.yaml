@@ -1,0 +1,107 @@
+# Issue-type vocabulary + containment graph.
+#
+# The four issue types the methodology recognises (epic, feature,
+# umbrella, task), what each represents, what each can contain via
+# native sub-issues, and what parent type each may sit under. Plus the
+# textual first-line parent-ref shape each type's body opens with.
+#
+# Milestone is a separate primitive — it scopes issues via the
+# Milestone field, not native sub-issues — and lives in
+# time-containers.yaml. Sub-tasks are markdown checkboxes inside a
+# Task's body and live in body-format.yaml.
+#
+# Consumed by the create-issue and validate-body skills to dispatch on
+# the type being filed (title prefix, body shape, parent-ref form) and
+# by the containment validator to refuse impossible filings (e.g., a
+# Feature inside a Feature).
+
+schema_version: 1
+
+source:
+  upstream: pm-workflow
+  commit: 9d1f0237f5d5778ed9811c72f22ae8268e5faff3
+  decisions: [MET-003, MET-004]
+  captured_at: 2026-05-21
+
+types:
+  epic:
+    title_prefix: EPIC
+    title_case: upper
+    structural_role: |
+      Multi-quarter thesis or outcome. The unit that justifies a whole
+      workstream. EPICs do not nest — there is no EPIC-in-EPIC.
+    can_contain: [feature, umbrella, task]
+    parent_issue_types: []
+    parent_ref_form: "Milestone: [#<N>](../milestone/<N>)"
+    parent_ref_optional: true
+    has_body: true
+    body_has_acceptance_criteria: false
+    gets_branch_and_pr: false
+
+  feature:
+    title_prefix: Feature
+    title_case: title
+    structural_role: |
+      Coherent cluster of Tasks that together deliver one capability.
+      Has acceptance criteria. Atomic — Features do not nest.
+    can_contain: [task]
+    parent_issue_types: [epic, milestone]
+    parent_ref_form: "EPIC: #<N> or Milestone: [#<N>](../milestone/<N>)"
+    parent_ref_optional: false
+    has_body: true
+    body_has_acceptance_criteria: true
+    gets_branch_and_pr: false
+
+  umbrella:
+    title_prefix: Umbrella
+    title_case: title
+    structural_role: |
+      Bucket of related Tasks that share a theme but don't deliver one
+      capability. No acceptance criteria. Umbrellas nest freely.
+    can_contain: [feature, umbrella, task]
+    parent_issue_types: [epic, umbrella, milestone]
+    parent_ref_form: "EPIC: #<N> or Umbrella: #<N> or Milestone: [#<N>](../milestone/<N>)"
+    parent_ref_optional: false
+    has_body: true
+    body_has_acceptance_criteria: false
+    gets_branch_and_pr: false
+
+  task:
+    title_prefix: Task
+    title_case: title
+    structural_role: |
+      One PR-sized unit of implementation work. Leaf of the issue
+      hierarchy; sub-tasks live as markdown checkboxes inside its body
+      (promoted to a standalone Task when they grow up).
+    can_contain: []
+    parent_issue_types: [feature, umbrella, epic, milestone]
+    parent_ref_form: "Feature: #<N> or Umbrella: #<N> or EPIC: #<N> or Milestone: [#<N>](../milestone/<N>)"
+    parent_ref_optional: false
+    has_body: true
+    body_has_acceptance_criteria: true
+    gets_branch_and_pr: true
+
+containment_invariants:
+  - rule: |
+      EPIC does not contain EPIC.
+    rationale: |
+      Long chains of nested theses no one reads. EPIC is the
+      top-of-hierarchy outcome; coordination above EPIC happens at
+      Milestone (scheduling) or via cross-EPIC references.
+  - rule: |
+      Feature does not contain Feature (no nesting).
+    rationale: |
+      Features are atomic capability claims. Nesting would muddy the
+      Feature/Umbrella distinction MET-003 makes load-bearing.
+  - rule: |
+      Feature does not contain Umbrella.
+    rationale: |
+      Same atomicity invariant. Multi-Task grouping inside a Feature
+      stays flat; cross-cutting buckets are modelled as sibling
+      Umbrellas.
+  - rule: |
+      Task contains only markdown sub-tasks (checkboxes), not issues.
+    rationale: |
+      Sub-tasks are markdown affordances inside a Task body; they
+      become standalone Tasks via the promotion procedure in MET-009,
+      and the promoted Task's parent is the *original* Task's parent.

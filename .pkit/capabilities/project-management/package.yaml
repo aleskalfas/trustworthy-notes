@@ -1,0 +1,139 @@
+schema_version: 2
+component:
+  kind: capability
+  name: project-management
+  version: 0.23.2
+description: Project-management discipline realized from the pm-workflow methodology — issue hierarchy, state machine, body validation, naming conventions — encoded as schemas a methodology-agnostic engine (skills + agent) consumes at runtime.
+requires_backbone: ">=1.26.0,<2.0.0"
+aliases:
+  - pm
+commands:
+  pre-check:
+    script: scripts/pre-check.py
+    help: Verify methodology prerequisites are present and configured (read-only diagnostic; hard gate on every pm operation).
+  bootstrap:
+    script: scripts/bootstrap.py
+    help: Create the methodology's required initial GitHub state (labels per classification axes; optionally a starter EPIC).
+  migrate:
+    script: scripts/migrate.py
+    help: Reconcile adopter state after a capability upgrade (per-change confirmation; refuses to run on pre-check failure).
+  add-member:
+    script: scripts/add-member.py
+    help: Add a member to the team-membership roster (per DEC-021). Open mode allows self-add; closed mode requires invoker to be a current member.
+  remove-member:
+    script: scripts/remove-member.py
+    help: Remove a member from the team-membership roster (per DEC-021). Removal landing requires PR review per DEC-021.
+  show-members:
+    script: scripts/show-members.py
+    help: Show the current team-membership roster and resolved invoker identity (read-only).
+  create-issue:
+    script: scripts/create-issue.py
+    help: File a new issue (per DEC-020). Composes title + body from the type's template, applies classification labels, optionally adds to the configured Projects v2 board.
+  create-milestone:
+    script: scripts/create-milestone.py
+    help: File a new Milestone in a declared category (per DEC-016). Computes the next number from existing milestones; composes title from category's title_format; posts to GitHub with the `Close trigger:` body line.
+  validate-issue:
+    script: scripts/validate-issue.py
+    help: Validate an existing GitHub issue against the methodology's body + classification rules. Findings tagged by severity per validation-severity.yaml.
+  show-issue:
+    script: scripts/show-issue.py
+    help: Show the methodology-relevant view of a GitHub issue (read-only). Surfaces type, classification, assignees, state, parent-ref, required-section summary.
+  assign-issue:
+    script: scripts/assign-issue.py
+    help: Reassign a GitHub issue. Supports --me self-assignment, --assignee for single/multi assignment, --unassign for removal (per DEC-019).
+  move-issue:
+    script: scripts/move-issue.py
+    help: Transition an issue through the lifecycle state machine (per DEC-006). Reads workflow.yaml; cascades parents upward on forward moves.
+  close-issue:
+    script: scripts/close-issue.py
+    help: Close an issue per DEC-006's closure paths. Default mode is wont-do (reason + checkbox close-gate per DEC-007); pr-merge mode runs the post-close cascade.
+  reopen-issue:
+    script: scripts/reopen-issue.py
+    help: Reopen a closed issue; optionally records an audit reason as a comment.
+  edit-issue:
+    script: scripts/edit-issue.py
+    help: Methodology-aware body / title edit. Validates the new state against body-format.yaml + titles.yaml before writing; refuses on hard-reject unless --force.
+  open-pr:
+    script: scripts/open-pr.py
+    help: Open a GitHub PR per the methodology's branch + title conventions. Derives the closing issue from the branch name; the Conventional Commits <type> from the issue's type:* label.
+  merge-pr:
+    script: scripts/merge-pr.py
+    help: Merge a PR with squash + delete-branch per git-conventions.yaml. Enforces the DEC-007 checkbox close-gate on every closing issue + the PR body.
+  close-pr:
+    script: scripts/close-pr.py
+    help: Close a PR without merging; optionally records an audit reason and deletes the source branch.
+  reopen-pr:
+    script: scripts/reopen-pr.py
+    help: Reopen a closed (unmerged) PR. Merged PRs are refused.
+  validate-pr:
+    script: scripts/validate-pr.py
+    help: Validate a PR's title (Conventional Commits + type alignment with closing issues) and body (Closes #N, Doc impact section) per titles.yaml + git-conventions.yaml.
+  edit-pr:
+    script: scripts/edit-pr.py
+    help: Methodology-aware edit of a PR's body or title. Validates new state before writing; refuses on hard-reject unless --force.
+  show-pr:
+    script: scripts/show-pr.py
+    help: Read-only view of a GitHub PR — title parse, state, branches, closing issues, reviewers, doc-impact section presence.
+  show-tree:
+    script: scripts/show-tree.py
+    help: PM-operational diagnostic. Walks the hierarchy (EPICs → Features/Umbrellas → Tasks → PRs) and reports orphans. Text / JSON / markdown output.
+  add-workstream:
+    script: scripts/add-workstream.py
+    help: Add a workstream to project/workstreams.yaml (per DEC-018). Validates slug; for label-substrate adopters, creates the workstream:<slug> label.
+  show-workstream:
+    script: scripts/show-workstream.py
+    help: Read-only view of one workstream entry (resolves from workstreams.yaml or config.yaml legacy fallback).
+  list-workstreams:
+    script: scripts/list-workstreams.py
+    help: List every workstream — filterable by status (active/deprecated/all). Surfaces parse errors + duplicate-name warnings.
+  edit-workstream:
+    script: scripts/edit-workstream.py
+    help: Edit an existing workstream's name / description / status / deprecated_reason. Status flips require confirmation per DEC-018.
+  rename-workstream:
+    script: scripts/rename-workstream.py
+    help: Rename a workstream slug. Updates workstreams.yaml + renames the GitHub `workstream:<slug>` label (label-substrate adopters).
+  merge-workstream:
+    script: scripts/merge-workstream.py
+    help: Merge one or more loser workstreams into a survivor. Re-tags issues + deletes loser labels (label-substrate adopters).
+  split-workstream:
+    script: scripts/split-workstream.py
+    help: Split one workstream into 2–5 new slugs (per DEC-018). Default-retag opt-in via --default; without it, issues are flagged for manual retag.
+  remove-workstream:
+    script: scripts/remove-workstream.py
+    help: Remove a workstream. Refuses if any issue still uses the label unless --force. Type-the-slug confirmation prompt.
+  check-mesh:
+    script: scripts/check-mesh.py
+    help: Compare local methodology state against configured mesh peers per DEC-022. Surfaces drift in labels, capability version, members, milestones as warnings. Read-only.
+  promote-issue:
+    script: scripts/promote-issue.py
+    help: "Workflow wrapper (DEC-026): Todo → Backlog with milestone + audit comment. Composes over move-issue."
+  start-work:
+    script: scripts/start-work.py
+    help: "Workflow wrapper (DEC-026): Backlog → In Progress. Creates branch + sets assignee; composes over move-issue."
+  create-draft:
+    script: scripts/create-draft.py
+    help: "Workflow wrapper (DEC-026): opens a draft PR for an in-progress branch. No issue-state transition."
+  review-work:
+    script: scripts/review-work.py
+    help: "Workflow wrapper (DEC-026): In Progress → Review. Opens ready PR or flips draft→ready; assigns reviewers; composes over move-issue."
+  back-to-draft:
+    script: scripts/back-to-draft.py
+    help: "Workflow wrapper (DEC-026): flips a ready PR back to draft; dismisses prior APPROVED reviews. Issue stays in Review."
+  done-work:
+    script: scripts/done-work.py
+    help: "Workflow wrapper (DEC-026): Review → Done. Squash-merges PR via three-way approval gate (APPROVED review / Approved-prefix comment / --bypass); composes over move-issue."
+  handoff-issue:
+    script: scripts/handoff-issue.py
+    help: "Workflow wrapper (DEC-026): reassign an in-flight issue to a new owner. Audit comment records the handoff; no state transition."
+  review-pr:
+    script: scripts/review-pr.py
+    help: "Local-agent review (DEC-028): invokes every locally-registered agent against the PR diff and posts each verdict as a comment. Sibling to the DEC-026 lifecycle palette."
+  self-test:
+    script: scripts/self-test.py
+    help: "Smoke-test the capability's core transition cycle on the live repo. Creates a throwaway issue, advances it through the state machine, and closes it. Use --dry-run to preview without mutating."
+  enable-default-agent:
+    script: scripts/enable-default-agent.py
+    help: "Activate the project-manager default-agent overlay for the claude-code harness (per DEC-030). Copies the capability-shipped overlay template to adopter-owned state and re-runs pkit sync."
+  disable-default-agent:
+    script: scripts/disable-default-agent.py
+    help: "Deactivate the project-manager default-agent overlay; strips the agent key from .claude/settings.json, removes the live overlay file, and re-runs pkit sync (per DEC-030)."

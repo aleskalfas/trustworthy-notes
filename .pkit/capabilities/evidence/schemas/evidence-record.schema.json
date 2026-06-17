@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evidence-record.schema.json",
+  "title": "Evidence records",
+  "description": "Per-directory evidence.yaml shape per [evidence:DEC-002-evidence-record-schema] + [project-kit:COR-023] binding. Each record captures one external excerpt cited by [ev:<slug>] tokens in adopter prose. Companion per COR-018.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "records"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "pkit_schema": {
+      "type": "string",
+      "description": "Adopter-side binding declaration (per [project-kit:COR-023]). When present on an adopter `evidence.yaml`, takes precedence over `binds_to:` fallback. Bare form `<capability>:<schema>` — e.g. `evidence:evidence-record`."
+    },
+    "binds_to": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Per-schema fallback binding (per [project-kit:COR-023]). Present on the capability-side schema YAML so the resolver can match adopter files without an explicit `pkit_schema:` field. Also accepted on adopter files for forward compatibility, though it has no effect there."
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      },
+      "description": "Evidence records. Each item has `id:` first (kebab-case slug). Chronological capture order recommended (newest at bottom) per the `evidence-add` skill."
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": [
+        "id",
+        "source_url",
+        "fetched_at",
+        "excerpt"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Kebab-case stable identifier; cited via `[ev:<id>]` in adopter prose."
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "URL or other reference to the source of the excerpt."
+        },
+        "fetched_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2})?)?$",
+          "description": "Date the excerpt was captured (YYYY-MM-DD or ISO 8601 timestamp)."
+        },
+        "excerpt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Verbatim text from the source that grounds the claim. Multi-line via YAML's `|` block scalar."
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional human-readable label."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional free-form note about what the fact is about."
+        }
+      },
+      "description": "One evidence record per excerpt, per [evidence:DEC-002-evidence-record-schema]."
+    }
+  }
+}

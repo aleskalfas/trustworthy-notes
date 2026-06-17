@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "confinement-toolkit.schema.json",
+  "title": "Confinement toolkits — per-tool OS-sandbox allowances, classified by boundary effect",
+  "description": "Formal shape of confinement-toolkit.yaml — a registry of named bundles of OS-sandbox allowances a tool needs to work under confinement (per ADR-008). Each allowance is classified `narrowing` (makes the box usable, no reach increase — auto-applicable) or `widening` (carves reach out of the box — explicit-gesture-only). Companion per COR-018 / the .pkit/schemas/ area conventions.",
+  "x-pkit-id-collection": "/toolkits",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "toolkits"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "toolkits": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/$defs/entry"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Toolkits. Keys are kebab-case tool/tool-group ids (uv, gh, docker, …); values match $defs.entry."
+    }
+  },
+  "$defs": {
+    "confinement-toolkit_ref": {
+      "type": "string",
+      "pattern": "^\\[confinement-toolkit:[a-z][a-z0-9-]*\\]$",
+      "description": "Narrowed cross-schema reference pattern for this namespace (per COR-019). Used by permission-profile.recommended_accommodations and permission-config.confinement_accommodations to name a toolkit."
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "allowances"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "One line: what the tool is and why it needs out-of-box reach."
+        },
+        "detect": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Repo-relative glob patterns whose presence signals this tool is in use (e.g. `uv.lock`, `.github/`). Consumed by `sandbox accommodate --detect`. Detection proposes NARROWING allowances only (ADR-008 rule 3); a toolkit whose allowances are all widening is never auto-proposed."
+        },
+        "allowances": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/allowance"
+          },
+          "description": "The sandbox-block allowances this tool needs, each classified by boundary effect."
+        }
+      }
+    },
+    "allowance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "effect"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "allow-write",
+            "allow-read",
+            "allow-unix-socket",
+            "allow-host",
+            "exclude-command",
+            "weaker-tls"
+          ],
+          "description": "Which sandbox-block key this writes: allow-write/allow-read → filesystem.allowWrite/allowRead; allow-unix-socket → network.allowUnixSockets; allow-host → network.allowedHosts (session-wide egress, not a security boundary — ADR-015); exclude-command → excludedCommands; weaker-tls → enableWeakerNetworkIsolation. NOTE: allow-host with value `*` (or host `any`) is unambiguously widening and never auto-applied (ADR-015 fork 6); named, bounded hosts are `narrowing-but-reported` (auto-applied but mandatorily surfaced with the egress honesty gloss)."
+        },
+        "effect": {
+          "type": "string",
+          "enum": [
+            "narrowing",
+            "widening"
+          ],
+          "description": "The load-bearing classification (ADR-008). `narrowing` = makes the box usable without enlarging reach (allow-write of a build cache, a needed socket; allow-host of a named bounded host) — auto-applicable, detectable, committable; allow-host narrowing is additionally mandatory-reported (the `narrowing-but-reported` posture per ADR-008 amendment / ADR-015). `widening` = lowers the boundary (a command carved out of the box, weakened TLS, allow-host with `*`) — explicit per-invocation gesture only, never committed, never detected, never applied by setup."
+        },
+        "value": {
+          "type": "string",
+          "description": "The path / command / socket the allowance targets (e.g. `~/.cache/uv`, `gh`, `~/.1password/agent.sock`). Omitted for `weaker-tls`, which is a boolean toggle with no target."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional honesty gloss surfaced by `sandbox toolkit show` — especially for widening allowances (what reach it opens; that egress is not a security boundary, per ADR-004)."
+        }
+      }
+    }
+  }
+}

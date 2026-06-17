@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "refs.schema.json",
+  "title": "Shared JSON Schema fragments for the schemas mechanism",
+  "description": "Canonical $defs library: kit-wide patterns that recur across companion schemas. Per the .pkit/schemas/ area conventions + COR-019. Companions cross-file $ref into this file (e.g., \"refs.schema.json#/$defs/source\") so the pattern lives in one place. Namespace-narrowed reference patterns (e.g., issue_type_ref) live in the namespace owner's own companion, not here — the owner is the source of truth for its own namespace.",
+  "$defs": {
+    "reference_token": {
+      "type": "string",
+      "pattern": "^\\[[a-z][a-z0-9-]*:[a-z][a-z0-9-]*\\]$",
+      "description": "Generic cross-schema reference token per COR-019. Form: `[<namespace>:<id>]`. Both namespace and id are kebab-case starting with a lowercase letter."
+    },
+    "source": {
+      "type": "object",
+      "description": "Structured lineage block carried by a schema distilled from an upstream spec. Optional — schemas that are their own source of truth omit it.",
+      "required": ["upstream", "commit", "decisions", "captured_at"],
+      "additionalProperties": false,
+      "properties": {
+        "upstream": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Upstream project name (e.g., `pm-workflow`)."
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$",
+          "description": "Full 40-character git SHA the schema was distilled from."
+        },
+        "decisions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Upstream decision identifiers the schema distills."
+        },
+        "captured_at": {
+          "type": "string",
+          "format": "date",
+          "description": "ISO 8601 date (YYYY-MM-DD) the distillation was performed."
+        }
+      }
+    }
+  }
+}

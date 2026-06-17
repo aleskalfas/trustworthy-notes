@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "permission-profile.schema.json",
+  "title": "Permission profile",
+  "description": "Formal shape of a permission-profile YAML — a named, selectable bundle of permission posture + a layered per-agent grant-source (per ADR-005 / COR-028). One profile is active per project (`active_profile` in permission-config); applying it sets posture and layers its grants UNDER the adopter's own grants.yaml (never replacing them — the model unions guardrail denies + profile grants + adopter grants, adopter last). Confinement (sandbox) is referenced in a profile's prose, not written by the minimal profile (ADR-005 defers the sandbox writer). Document-shaped: the file IS the resource; the profile's name is its filename. Companion per COR-018 / the .pkit/schemas/ area conventions.",
+  "type": "object",
+  "required": ["schema_version", "description", "grants"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-line, human-readable summary of the autonomy level this profile grants."
+    },
+    "posture": {
+      "type": "string",
+      "enum": ["lenient", "strict"],
+      "description": "The posture this profile sets when applied (per permission-config). Absent = leave posture unchanged."
+    },
+    "grants": {
+      "type": "array",
+      "items": { "$ref": "permission-grants.schema.json#/$defs/grant" },
+      "description": "The per-agent intent grants this profile layers — unioned BETWEEN the catalog guardrail denies and the adopter's own grants.yaml (adopter last; manual grants are never overwritten). Empty is valid (a posture-only profile)."
+    },
+    "recommended_accommodations": {
+      "type": "array",
+      "items": { "$ref": "confinement-toolkit.schema.json#/$defs/confinement-toolkit_ref" },
+      "description": "Confinement toolkits this profile RECOMMENDS (per ADR-008) — a documentation hint surfaced by `profile show` and seeded into permission-config by `setup autonomy` on first run. NEVER written by `profile activate` (which stays nudge-only and writes no sandbox state); the authoritative list is permission-config.confinement_accommodations. Narrowing-only by convention — a profile never recommends a boundary-widening allowance."
+    }
+  }
+}

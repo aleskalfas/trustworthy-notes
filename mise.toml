@@ -1,0 +1,40 @@
+# mise.toml — DEVELOPMENT toolchain for contributors only.
+#
+# END USERS DO NOT NEED THIS. To just use the tool: install uv, then
+#     uv tool install --editable .
+#     tn auth set-key
+# (see README.md "Platform"). This file only pins the dev toolchain so a fresh
+# checkout is one `mise install` away — it is not part of the end-user path.
+#
+# Note: mise manages *tools/runtimes* (python, uv, ant). Python *libraries*
+# (pdfplumber, anthropic, …) stay with uv via pyproject.toml + uv.lock.
+
+[tools]
+python = "3.12"
+uv = "latest"
+
+# `ant` — Anthropic's CLI, only needed for the account/OAuth auth path
+# (`tn auth login`). The normal path uses an API key (`tn auth set-key`) and
+# needs none of this. The release archive's binary is named `ant`, so we tell
+# the github backend the executable name explicitly.
+"github:anthropics/anthropic-cli" = { version = "latest", exe = "ant" }
+
+[tasks.bootstrap]
+description = "One command (same on macOS + Windows): put the `tn` command on your PATH."
+# mise provides `uv` (auto-installed from [tools]); each line runs cross-platform.
+run = [
+    "uv tool install --editable . --reinstall",
+    "uv tool update-shell",
+]
+
+[tasks.sync]
+description = "Install Python dependencies (incl. dev) into the venv"
+run = "uv sync"
+
+[tasks.test]
+description = "Run the test suite"
+run = "uv run pytest"
+
+[tasks.install]
+description = "Install/refresh the `tn` command on your PATH"
+run = "uv tool install --editable . --reinstall"

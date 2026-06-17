@@ -1,0 +1,1 @@
+../../../.pkit/skills/core/area-author.md

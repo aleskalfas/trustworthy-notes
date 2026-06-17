@@ -1,0 +1,332 @@
+# Issue-lifecycle state machine + transitions + cascade.
+#
+# Five states (todo → backlog → in-progress → review → done) the
+# methodology drives every issue through, the gated transitions between
+# them (who authorises, who executes, what severity applies on
+# violation), the upward-only cascade rules (forward and closure), and
+# the closure triggers (PR-merge into main, PR-merge into integration
+# branch, manual won't-do).
+#
+# Consumed by the transition-state skill (walks the machine, dispatches
+# on `authorisation` to refuse user-gated moves without explicit
+# authorisation) and by the validator (cascade check after every
+# state-changing op).
+
+schema_version: 2
+
+source:
+  upstream: pm-workflow
+  commit: 9d1f0237f5d5778ed9811c72f22ae8268e5faff3
+  decisions: [MET-005]
+  captured_at: 2026-05-21
+
+states:
+  - id: todo
+    display_name: Todo
+    meaning: |
+      Filed; not yet scheduled to a Milestone.
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    inferred_from: |
+      Issue open, no Milestone assigned.
+
+  - id: backlog
+    display_name: Backlog
+    meaning: |
+      Scheduled (Milestone assigned); not started.
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    inferred_from: |
+      Issue open, Milestone assigned, no feature branch exists.
+
+  - id: in-progress
+    display_name: In Progress
+    meaning: |
+      Branch open, work in flight.
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    inferred_from: |
+      For Tasks: the feature branch named per git-conventions.yaml's
+      branch-name pattern exists on the remote. For parents (EPIC,
+      Feature, Umbrella): inferred from at least one descendant being
+      in-progress or further.
+
+  - id: review
+    display_name: Review
+    meaning: |
+      PR open, awaiting human review. Task only — parents skip this
+      state.
+    applies_to:
+      - "[issue-types:task]"
+    inferred_from: |
+      An open PR exists whose body carries `Closes #<task-number>`.
+
+  - id: done
+    display_name: Done
+    meaning: |
+      Issue closed (merged via PR, or closed as won't-do).
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    inferred_from: |
+      GitHub issue state = closed.
+
+transitions:
+  - from: todo
+    to: backlog
+    command: promote-issue
+    pr_state_effect: "none → none"
+    authorisation: user
+    executor: agent
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    severity: "[validation-severity:bypassable-with-audit]"
+    notes: |
+      User typically assigns the Milestone; agent may execute on verbal
+      authorisation, posting an audit comment per
+      `bypassable-with-audit` semantics. Owned by `promote-issue` per
+      DEC-026; the wrapper writes the audit comment with prefix
+      `Promoted` and then calls `move-issue --to backlog`.
+
+  - from: backlog
+    to: in-progress
+    command: start-work
+    pr_state_effect: "none → none"
+    authorisation: agent-autonomous
+    executor: agent
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    severity: "[validation-severity:warning]"
+    notes: |
+      Agent opens the branch on `start-work`. For parents, the
+      transition is inferred from forward cascade (see `cascade.forward`).
+      Owned by `start-work` per DEC-026; the wrapper creates the branch,
+      sets the assignee, and then calls `move-issue --to in-progress`.
+
+  - from: in-progress
+    to: review
+    command: review-work
+    pr_state_effect: "none → ready | draft → ready"
+    authorisation: agent-autonomous
+    executor: agent
+    applies_to:
+      - "[issue-types:task]"
+    severity: "[validation-severity:warning]"
+    notes: |
+      Agent opens the PR on `review-work`. Review is task-only. Owned
+      by `review-work` per DEC-026; the wrapper opens a ready PR if
+      none exists, flips draft→ready if a draft exists, assigns
+      reviewers per DEC-027 mode resolution, then calls `move-issue
+      --to review`.
+
+  - from: review
+    to: done
+    command: done-work
+    pr_state_effect: "ready → merged"
+    authorisation: user
+    executor: agent
+    applies_to:
+      - "[issue-types:task]"
+    severity: "[validation-severity:hard-reject]"
+    notes: |
+      User authorises the merge per-PR; agent runs the squash-merge
+      after the checkbox-completeness check passes. PR-merge bypassing
+      the gate is a hard reject — the audit-trail mechanism does not
+      apply (the merge button is the gate). Owned by `done-work` per
+      DEC-026; approval gate is mode-conditional per DEC-027 / DEC-028.
+
+  - from: in-progress
+    to: done
+    command: close-issue
+    pr_state_effect: "none → none"
+    authorisation: user
+    executor: agent
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+    severity: "[validation-severity:hard-reject]"
+    notes: |
+      Closure-cascade eligibility path for parents — every child closed,
+      parent's checkboxes (acceptance/success criteria) all ticked, user
+      authorises closure for this level. Owned by `close-issue` (not part
+      of the seven-command palette per DEC-026; closure is its own
+      concern).
+
+  - from: backlog
+    to: done
+    command: close-issue
+    pr_state_effect: "none → none"
+    authorisation: user
+    executor: agent
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    severity: "[validation-severity:hard-reject]"
+    notes: |
+      Won't-do close from Backlog. All checkboxes must be ticked or
+      removed first (per MET-006). Owned by `close-issue`.
+
+  - from: todo
+    to: done
+    command: close-issue
+    pr_state_effect: "none → none"
+    authorisation: user
+    executor: agent
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    severity: "[validation-severity:hard-reject]"
+    notes: |
+      Won't-do close from Todo. Same checkbox rule as Backlog → Done.
+      Owned by `close-issue`.
+
+  # PR sub-lifecycle rows per DEC-026 — no issue-state transition;
+  # the wrapper drives a PR-state change only.
+
+  - from: in-progress
+    to: in-progress
+    command: create-draft
+    pr_state_effect: "none → draft"
+    authorisation: agent-autonomous
+    executor: agent
+    applies_to:
+      - "[issue-types:task]"
+    severity: "[validation-severity:warning]"
+    notes: |
+      `create-draft` opens a draft PR while the issue stays in
+      In Progress. Used when CI should run on the work-in-progress
+      branch before the work is ready for review. No issue-state
+      change; only a PR-state effect.
+
+  - from: review
+    to: review
+    command: back-to-draft
+    pr_state_effect: "ready → draft"
+    authorisation: agent-autonomous
+    executor: agent
+    applies_to:
+      - "[issue-types:task]"
+    severity: "[validation-severity:warning]"
+    notes: |
+      `back-to-draft` flips a Ready PR back to Draft (via
+      `gh pr ready --undo`) and dismisses prior APPROVED reviews
+      (`gh pr review --dismiss`) so the next `done-work` cycle
+      requires fresh review of changed content. Issue stays in Review
+      because the work-flow phase hasn't changed — the reviewer is
+      still waiting; only the PR-readiness flipped.
+
+cascade:
+  forward:
+    direction: upward
+    behaviour: |
+      Automatic. When a child moves forward (todo → backlog → in-progress),
+      the agent checks each ancestor and bumps any that is behind. The
+      forward cascade is scoped to todo → backlog → in-progress only;
+      containers do not forward-cascade into review or done. When a child
+      enters review or done, its container is bumped to at most in-progress
+      (if it was behind). Containers reach done only via the closure
+      cascade once all children are done (cascade-eligibility-close).
+      First child to move flips the chain; later siblings re-flipping is
+      a no-op.
+    applies_to_levels:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+    idempotent: true
+    requires_user_authorisation: false
+
+  closure:
+    direction: upward
+    behaviour: |
+      Semi-automatic. When the last open child of a parent closes, the
+      parent becomes eligible to close — but never auto-closes. The
+      agent validates the parent's close criteria (Feature acceptance
+      criteria ticked, EPIC success criteria met, Umbrella purpose
+      served) and prompts the user to authorise closure for each level.
+    applies_to_levels:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+    idempotent: false
+    requires_user_authorisation: true
+
+  downward:
+    direction: none
+    behaviour: |
+      Disallowed. Parent state changes do not change children. Children
+      advance on their own pace. Modelling parent → child cascade would
+      be the wrong direction of causation.
+    applies_to_levels: []
+    idempotent: false
+    requires_user_authorisation: false
+
+closure_triggers:
+  - id: pr-merge-into-main
+    target_state: done
+    applies_to:
+      - "[issue-types:task]"
+    mechanism: |
+      Agent opens PR → user authorises merge → agent squash-merges with
+      `--delete-branch`. GitHub's `Closes #N` keyword in the PR body
+      auto-closes the Task on merge. Cascade-check runs against the
+      Task's parents immediately after.
+
+  - id: pr-merge-into-integration
+    target_state: done
+    applies_to:
+      - "[issue-types:task]"
+      - "[issue-types:feature]"
+    mechanism: |
+      Same as `pr-merge-into-main` but the PR base is
+      `integration/<slug>` (per the `Integration:` marker on the issue
+      body). `Closes #N` auto-closes the marked descendant on merge into
+      the integration branch; the owning root closes via a separate
+      final `integration/<slug>` → main PR with `Closes #<owning>`.
+
+  - id: manual-wont-do
+    target_state: done
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+      - "[issue-types:task]"
+    mechanism: |
+      User authorises won't-do closure with a reason. Agent verifies
+      all checkboxes are ticked or removed (per MET-006), records the
+      reason in a close comment, closes the issue. Cascade runs as for
+      a PR-merge closure.
+
+  - id: cascade-eligibility-close
+    target_state: done
+    applies_to:
+      - "[issue-types:epic]"
+      - "[issue-types:feature]"
+      - "[issue-types:umbrella]"
+    mechanism: |
+      Triggered by the closure cascade when the last open child of a
+      parent closes. Agent validates parent's close criteria
+      (Feature/EPIC checkboxes ticked, Umbrella purpose served) and
+      prompts the user for explicit authorisation per level. Never
+      auto-closes.

@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "workflow.schema.json",
+  "title": "Issue-lifecycle state machine + transitions + cascade",
+  "description": "Formal shape of workflow.yaml — the five issue-lifecycle states (todo, backlog, in-progress, review, done), the gated transitions between them (who authorises, who executes, what severity gates apply), the cascade rules (upward-only forward and closure cascade; no downward), and the closure triggers (PR merge into main, PR merge into integration branch, manual won't-do). Consumed by the transition-state skill to walk the machine, and by the validator to enforce authorisation gates. Companion per COR-018.",
+  "x-pkit-id-collection": "/states",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "states",
+    "transitions",
+    "cascade",
+    "closure_triggers"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 2
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "states": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "States in linear order from filing to closure. Order is load-bearing: forward cascade infers 'ancestor is behind' from this ordering."
+    },
+    "transitions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/transition" },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Allowed transitions. A transition not listed here is forbidden."
+    },
+    "cascade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forward", "closure", "downward"],
+      "properties": {
+        "forward": { "$ref": "#/$defs/cascade_rule" },
+        "closure": { "$ref": "#/$defs/cascade_rule" },
+        "downward": { "$ref": "#/$defs/cascade_rule" }
+      },
+      "description": "The three cascade behaviours. Forward and closure cascade upward through ancestors; downward cascade is explicitly disallowed (parent state changes don't propagate to children)."
+    },
+    "closure_triggers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/closure_trigger" },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Recognised paths by which an issue reaches the Done state."
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name",
+        "meaning",
+        "applies_to",
+        "inferred_from"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Kebab-case state id (e.g., `todo`, `in-progress`)."
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Display form used in board UIs and prose (e.g., `Todo`, `In Progress`, `Done`)."
+        },
+        "meaning": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line definition of what an issue in this state represents."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": { "$ref": "issue-types.schema.json#/$defs/issue_type_ref" },
+          "uniqueItems": true,
+          "description": "Issue-type tokens for which this state is reachable. Empty array would mean the state applies to no type and is therefore unused; populated lists name the types that pass through this state. Review is task-only; the other four states apply to every issue type."
+        },
+        "inferred_from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Prose naming the native GitHub primitives the canonical state is derived from (issue open/closed, Milestone assignment, branch existence, PR state). Board fields are a projection — when native and board disagree, native wins."
+        }
+      },
+      "description": "Per-state shape."
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "command",
+        "pr_state_effect",
+        "authorisation",
+        "executor",
+        "applies_to",
+        "severity"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Source state id (in-schema ref into `states`)."
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Target state id (in-schema ref into `states`). Equal to `from` for PR sub-lifecycle rows (no issue-state change, only a `pr_state_effect`)."
+        },
+        "command": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "The verb-subject workflow-wrapper command that owns this transition (per DEC-026). Forward-progress wrappers: promote-issue / start-work / create-draft / review-work / back-to-draft / done-work. Won't-do closure rows use `close-issue` (outside the seven-command palette per DEC-026 rationale). Other commands (handoff-issue) don't appear here because they don't drive any transition."
+        },
+        "pr_state_effect": {
+          "type": "string",
+          "pattern": "^[a-z|→ -]+$",
+          "description": "The PR-state effect the owning command drives. Values: `none → none` (no PR effect), `none → draft` (create-draft), `none → ready | draft → ready` (review-work — opens new or flips draft→ready), `ready → draft` (back-to-draft), `ready → merged` (done-work). PR state is coupled to issue state; this field captures the coupling explicitly at the schema level."
+        },
+        "authorisation": {
+          "type": "string",
+          "enum": ["user", "agent-autonomous"],
+          "description": "`user` = user holds the gate; agent may not flip without explicit authorisation (session-scoped). `agent-autonomous` = agent flips without prompting."
+        },
+        "executor": {
+          "type": "string",
+          "enum": ["agent", "user"],
+          "description": "Which actor performs the mutation. The user can both authorise and execute (rare); the agent typically executes either way."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": { "$ref": "issue-types.schema.json#/$defs/issue_type_ref" },
+          "uniqueItems": true,
+          "description": "Issue-type tokens for which this transition is valid."
+        },
+        "severity": {
+          "$ref": "validation-severity.schema.json#/$defs/severity_ref",
+          "description": "Severity the agent applies when a user-gated transition is attempted without authorisation."
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional prose. Edge cases, examples, integration-branch variants."
+        }
+      },
+      "description": "One allowed transition. Per DEC-026 schema_version 2, every transition declares its owning workflow-wrapper command and PR-state effect — including no-issue-transition rows for PR sub-lifecycle events (`from == to`)."
+    },
+    "cascade_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction", "behaviour", "applies_to_levels"],
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": ["upward", "downward", "none"],
+          "description": "Which way the cascade propagates. `upward` = child change affects ancestor; `downward` = parent change affects child; `none` = disallowed."
+        },
+        "behaviour": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Prose describing the agent's action when a triggering condition is met."
+        },
+        "applies_to_levels": {
+          "type": "array",
+          "items": { "$ref": "issue-types.schema.json#/$defs/issue_type_ref" },
+          "uniqueItems": true,
+          "description": "Issue-type tokens the cascade walks through as ancestors / descendants. Empty array means the cascade is disabled."
+        },
+        "idempotent": {
+          "type": "boolean",
+          "description": "Whether re-firing the cascade on already-cascaded ancestors is a no-op. Forward cascade: true."
+        },
+        "requires_user_authorisation": {
+          "type": "boolean",
+          "description": "Whether the cascade prompts the user before mutating each level. Closure cascade: true (per-level)."
+        }
+      },
+      "description": "One of the three cascade behaviours."
+    },
+    "closure_trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "target_state", "applies_to", "mechanism"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Trigger id."
+        },
+        "target_state": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Final state the trigger drives the issue to (always `done` at v0.1.0; field present for forward-compatibility)."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": { "$ref": "issue-types.schema.json#/$defs/issue_type_ref" },
+          "uniqueItems": true,
+          "description": "Issue-type tokens the trigger applies to."
+        },
+        "mechanism": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Prose describing the trigger's mechanics — what user action fires it, what the agent does in response, what auto-closes via GitHub."
+        }
+      },
+      "description": "One closure path."
+    }
+  }
+}

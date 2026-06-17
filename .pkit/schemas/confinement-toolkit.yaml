@@ -1,0 +1,127 @@
+# Confinement toolkits — per-tool OS-sandbox allowances, classified by boundary effect.
+#
+# A toolkit names the sandbox-block allowances one tool (or tool-group) needs to
+# work under OS confinement (per ADR-008). Each allowance carries an `effect`:
+#   narrowing — makes the box usable without enlarging the agent's reach
+#               (a build-cache allowWrite, a needed unix socket, or a named
+#               allow-host). Safe to detect, commit, and auto-apply via
+#               `setup autonomy`. NOTE: allow-host narrowing is the
+#               "narrowing-but-reported" posture (ADR-008 amendment / ADR-015):
+#               auto-applied like narrowing, but MANDATORY surfaced with the
+#               verbatim "session-wide egress to <host>; not a security
+#               boundary" gloss in sandbox status / permissions overview /
+#               toolkit listing. The allowlist is not a security boundary (no
+#               TLS inspection; ADR-004 §61).
+#   widening  — lowers the boundary: a command carved OUT of the box to run
+#               unconfined (excludedCommands), weakened TLS, or allow-host
+#               with value `*` (open egress to every host). Explicit
+#               per-invocation operator gesture only — never committed, never
+#               detected, never applied by setup (ADR-008 rules 3–4).
+# The `sandbox accommodate` verb applies a toolkit's narrowing allowances; its
+# widening allowances are surfaced as the explicit `sandbox exclude` gesture.
+# `detect` globs signal a tool is in use. Backbone ships this set; projects
+# extend/override by same-name (the privilege-catalog data pattern).
+#
+# allow-host — new allowance kind (ADR-015, issue #24):
+#   Routes named hosts to sandbox.network.allowedHosts via the single provenance
+#   writer. Named bounded hosts (e.g. "api.github.com") are `narrowing` effect
+#   (narrowing-but-reported). The wildcard `*` is `widening` effect (never
+#   auto-applied; only via `sandbox exclude`). Every applied allow-host is
+#   mandatorily surfaced with the egress honesty gloss (session-wide; not a
+#   security boundary). See ADR-015 for the full design.
+
+schema_version: 1
+
+toolkits:
+  uv:
+    description: The uv Python package/runner — writes its package cache outside the project.
+    detect:
+      - "uv.lock"
+      - "pyproject.toml"
+    allowances:
+      - kind: allow-write
+        effect: narrowing
+        value: "~/.cache/uv"
+        note: uv's shared package cache; confined writes can't reach it otherwise.
+
+  node:
+    description: Node / npm / pnpm — write their shared caches outside the project.
+    detect:
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "package-lock.json"
+    allowances:
+      - kind: allow-write
+        effect: narrowing
+        value: "~/.npm"
+      - kind: allow-write
+        effect: narrowing
+        value: "~/.cache/node"
+
+  github-api:
+    description: GitHub API — session-wide egress to api.github.com for capabilities that call the GitHub REST/GraphQL API (e.g. project-management).
+    detect:
+      - ".github/"
+    allowances:
+      - kind: allow-host
+        effect: narrowing
+        value: "api.github.com"
+        note: >-
+          session-wide egress to api.github.com; not a security boundary
+          (no TLS inspection — ADR-004 §61 / ADR-015). The sandbox allowlist
+          bounds well-behaved egress but does not stop IP-literal / DNS-rebind
+          / domain-fronting exfil. Apply only for capabilities that need the
+          GitHub API; for fully unconfined gh CLI access, use `sandbox exclude gh`.
+
+  anthropic-api:
+    description: Anthropic API — session-wide egress to api.anthropic.com for projects/capabilities that call the Anthropic (Claude) API.
+    # No detect: field — explicit-accommodate only. There is no clean path-glob
+    # that signals "this project calls the Anthropic API": the `anthropic`
+    # dependency lives inside pyproject.toml content, and pyproject.toml is
+    # already the broad `uv` detect signal (reusing it would mis-fire on every
+    # Python project). Egress is an appropriate deliberate operator opt-in via
+    # `pkit permissions sandbox accommodate anthropic-api`.
+    allowances:
+      - kind: allow-host
+        effect: narrowing
+        value: "api.anthropic.com"
+        note: >-
+          session-wide egress to api.anthropic.com; not a security boundary
+          (no TLS inspection — ADR-004 §61 / ADR-015). The sandbox allowlist
+          bounds well-behaved egress but does not stop IP-literal / DNS-rebind
+          / domain-fronting exfil. Apply only for projects/capabilities that
+          call the Anthropic API.
+
+  # NOTE: there is intentionally no `ssh-agent` toolkit. The SSH agent socket
+  # path is a per-session HOST fact ($SSH_AUTH_SOCK), not a static value a
+  # shipped toolkit can hold (per ADR-010). `setup autonomy` resolves and
+  # applies it from the environment; for a one-off, `pkit permissions sandbox
+  # accommodate --socket "$SSH_AUTH_SOCK"`.
+
+  gh:
+    description: GitHub CLI — Go-based TLS verification fails under macOS Seatbelt; must run outside the box.
+    detect:
+      - ".github/"
+    allowances:
+      - kind: exclude-command
+        effect: widening
+        value: "gh"
+        note: >-
+          runs gh OUTSIDE the box (full host reach). Needed because gh's TLS
+          handshake fails under Seatbelt; not a confinement reduction you should
+          accept silently — egress from gh is not bounded by the sandbox.
+
+  docker:
+    description: Docker / docker-compose — incompatible with the sandbox; must run outside the box.
+    detect:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "compose.yaml"
+    allowances:
+      - kind: exclude-command
+        effect: widening
+        value: "docker"
+        note: >-
+          runs docker OUTSIDE the box. docker itself launches containers with
+          arbitrary mounts/network — excluding it is a real boundary reduction;
+          apply only by the explicit `sandbox exclude` gesture.

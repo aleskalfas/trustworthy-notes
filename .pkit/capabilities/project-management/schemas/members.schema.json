@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "members.schema.json",
+  "title": "Project-management team membership",
+  "description": "Per DEC-021, an adopter's team-membership roster gating pm operations. Open mode: file absent or members:[] empty list. Closed mode: ≥1 member. Only listed members may invoke mutating pm scripts; bootstrap is self-add by the first member while open mode applies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "members"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bumps when this file's shape changes; same-PR-as-surface-change discipline per DEC-017."
+    },
+    "members": {
+      "type": "array",
+      "description": "Roster of authorised members. Empty array == open mode (any invoker passes). ≥1 entry == closed mode (only listed members pass).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["github_login"],
+        "properties": {
+          "github_login": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Canonical identity. Matches the value `gh api user --jq .login` returns for the member."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name."
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Identity surface for matching invocations where `gh` is unavailable; falls back to `git config user.email`."
+          },
+          "role": {
+            "type": "string",
+            "enum": ["PM", "Implementer"],
+            "description": "Informational at v1 per DEC-021. PM and Implementer roles from DEC-008 are not enforced at the script layer; field is here so the assignment is visible to reviewers."
+          },
+          "added_at": {
+            "type": "string",
+            "format": "date",
+            "description": "Date the entry was added (ISO 8601 YYYY-MM-DD)."
+          },
+          "added_by": {
+            "type": "string",
+            "description": "GitHub login of the existing member who authored the addition, or the literal string `bootstrap` for the first member."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+# Mandatory issue state — assignee + board membership.
+#
+# Per project-management:DEC-019, this schema encodes the two
+# required-but-not-classification issue states the methodology
+# enforces:
+#
+#   * `assignee` — every issue has one or more assignees. Default at
+#     filing is the filer themselves; reassignment is open to any team
+#     member per DEC-021.
+#   * `board_membership` — for board-substrate adopters (per DEC-012),
+#     every issue lives on the configured Projects v2 board.
+#
+# Enforcement distributes across DEC-020's three-layer defence model:
+#   * Methodology-mediated commands (create-issue.py, validate-issue.py).
+#   * Post-check workflow template (templates/.github/workflows/
+#     pm-issue-check.yml).
+#   * Environment pre-check (pre-check.py) — environment health,
+#     not per-issue scanning.
+#
+# Consumed by create-issue (apply defaults, validate at filing) and
+# validate-issue (drift check on existing issues + post-check
+# workflow).
+
+schema_version: 1
+
+required_fields:
+  assignee:
+    description: |
+      Every issue has at least one assignee. The filer is the default
+      at filing time; reassignment is open to any team member.
+    substrate: native-assignee-field
+    required_on_every_issue: true
+    multiplicity: one-or-more
+    default_at_filing: filer
+    values_constrained_to: members
+    missing_severity: "[validation-severity:hard-reject]"
+    drift_severity: "[validation-severity:warning]"
+
+  board_membership:
+    description: |
+      For board-substrate adopters (config.has_projects_v2_board==true),
+      every issue must be added to the configured Projects v2 board.
+      The board is the substrate that carries classification (priority,
+      workstream) for board-substrate adopters per DEC-012.
+    substrate: projects-v2-board-item
+    required_on_every_issue: true
+    applies_when: "config.has_projects_v2_board == true"
+    default_at_filing: auto-add-to-configured-board
+    missing_severity: "[validation-severity:hard-reject]"
+    drift_severity: "[validation-severity:warning]"

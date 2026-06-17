@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "permission-grants.schema.json",
+  "title": "Permission grant model",
+  "description": "Formal shape of permission-grants.yaml — the project's declared permission intent (per COR-028). A list of grants, each attaching a subject (an agent, the `all` baseline, or the `operator`) to one or more privileges, optionally scoped, with an allow/deny effect. Privileges are referenced as `[privilege-catalog:<id>]` typed tokens (COR-019). Document-shaped schema: the file IS the resource. Companion per COR-018 / the .pkit/schemas/ area conventions.",
+  "type": "object",
+  "required": ["schema_version", "grants"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "source": { "$ref": "refs.schema.json#/$defs/source" },
+    "grants": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/grant" },
+      "description": "The declared grants. Empty is valid (no intent declared)."
+    }
+  },
+  "$defs": {
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "privilege"],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "pattern": "^(all|operator|agent:[a-z][a-z0-9-]*)$",
+          "description": "Who the grant is about: `all` (baseline applying to every agent), `operator` (the human driving the session), or `agent:<name>`."
+        },
+        "privilege": {
+          "description": "One privilege, or a list of privileges, this grant covers — each a `[privilege-catalog:<id>]` token (COR-019).",
+          "oneOf": [
+            { "$ref": "privilege-catalog.schema.json#/$defs/privilege_ref" },
+            {
+              "type": "array",
+              "items": { "$ref": "privilege-catalog.schema.json#/$defs/privilege_ref" },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ]
+        },
+        "scope": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Where/when the grant applies (e.g. directory globs for a directory-scoped privilege). Absent = anywhere. A scoped allow denies the privilege outside the scope."
+        },
+        "effect": {
+          "type": "string",
+          "enum": ["allow", "deny"],
+          "description": "Whether the grant allows or denies. Absent defaults to `allow`. Deny wins over allow across a subject's effective grant set."
+        }
+      }
+    }
+  }
+}

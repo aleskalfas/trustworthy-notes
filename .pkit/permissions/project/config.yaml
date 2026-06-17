@@ -1,0 +1,8 @@
+schema_version: 1
+ownership_mode: additive
+active_profile: autonomous
+posture: lenient
+confinement_accommodations:
+- '[confinement-toolkit:uv]'
+- '[confinement-toolkit:github-api]'
+- '[confinement-toolkit:anthropic-api]'

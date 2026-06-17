@@ -1,0 +1,9 @@
+schema_version: 1
+# Capability-contributed intent-grant fragment (ADR-016).
+# Discovered by load_model via manifest-walk; applies only when the
+# project-management capability is an installed component.
+# The privilege definition stays in the backbone catalog (deferred seam CA-1).
+grants:
+  - subject: agent:project-manager
+    privilege: '[privilege-catalog:issue-tracker-write]'
+    effect: deny

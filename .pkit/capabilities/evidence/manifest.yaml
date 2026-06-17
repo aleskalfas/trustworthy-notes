@@ -1,0 +1,8 @@
+schema_version: 1
+component:
+  kind: capability
+  name: evidence
+  version: 0.5.1
+  installed_at: '2026-06-17T08:39:57.363154+00:00'
+requires_backbone: '>=1.26.0,<2.0.0'
+backend_state: {}

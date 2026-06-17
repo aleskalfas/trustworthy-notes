@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hook-kinds/post-comment.schema.json",
+  "title": "Hook kind: post-comment",
+  "description": "Posts a comment on the issue or PR using a template file. The template is rendered with the lifecycle event's context (issue.number, issue.title, repo, etc.) and posted via `gh issue comment` or `gh pr comment`. Per DEC-024. Idempotent: the engine writes a stable template-stamp marker comment and skips if a comment with the same stamp already exists.",
+  "x-pkit-hook-kind": "post-comment",
+  "x-pkit-idempotent": true,
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "template_path"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "post-comment",
+      "description": "Discriminator."
+    },
+    "template_path": {
+      "type": "string",
+      "pattern": "^project/",
+      "minLength": 9,
+      "description": "Path to the template, relative to the capability root (e.g., `project/hook-templates/close-comment.md`). Must live under `project/` (adopter-owned per the no-shared-files invariant). The template renders with mustache-style placeholders: `{{ issue.number }}`, `{{ issue.title }}`, `{{ repo }}`, etc."
+    },
+    "stamp_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Optional stable identifier for the comment's idempotency stamp. Defaults to the template_path's basename without extension. The engine writes `<!-- pkit-hook: <stamp_id> -->` as the first line of the rendered comment and detects replay by searching existing comments for that marker."
+    }
+  }
+}

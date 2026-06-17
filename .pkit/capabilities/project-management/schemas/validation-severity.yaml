@@ -1,0 +1,82 @@
+# Validation severity vocabulary.
+#
+# The three classes the methodology tags every validation rule with.
+# Each class fixes the agent's behaviour on violation — whether the
+# operation aborts, whether the user may override, and (when override
+# exists) what audit comment the agent posts before the mutation.
+#
+# Consumed by the validator skill / agent at runtime to dispatch on a
+# rule's tagged severity. Other schemas reference these entries via the
+# typed token `[validation-severity:<id>]` (COR-019).
+
+schema_version: 1
+
+source:
+  upstream: pm-workflow
+  commit: 9d1f0237f5d5778ed9811c72f22ae8268e5faff3
+  decisions: [MET-013]
+  captured_at: 2026-05-21
+
+severities:
+  hard-reject:
+    summary: |
+      Agent refuses the operation; no override path. Used for rules
+      whose violation would corrupt downstream logic (containment,
+      closure invariants, required structure).
+    behaviour: |
+      The agent halts before any mutation, surfaces the failed rule
+      and the failing input, and ends the operation. No further steps
+      execute. There is no `--bypass` form. The user must fix the input
+      and retry.
+    bypassable: false
+    aborts_operation: true
+    examples:
+      - "Title does not start with `[Type]` prefix"
+      - "PR body has no `Closes #N` reference"
+      - "Closing an issue with unticked checkboxes"
+      - "Filing a Feature inside a Feature (containment violation)"
+      - "Issue body missing a required section per its type"
+      - "New Milestone filing has no `Close trigger:` line"
+
+  bypassable-with-audit:
+    summary: |
+      Agent refuses by default; user may override with an explicit
+      reason. Before the mutation runs, the agent posts an audit
+      comment on the affected issue or PR so the bypass survives even
+      if the mutation later fails.
+    behaviour: |
+      On violation without bypass: the operation aborts like a
+      hard-reject. With `--bypass "<reason>"` (or the configured
+      override syntax) carrying a non-empty reason, the agent posts
+      the audit-comment template (filled with name, email, reason)
+      onto the affected issue or PR and then runs the mutation. The
+      comment lands first so the trail survives partial failure.
+    bypassable: true
+    aborts_operation: true
+    override_syntax: '--bypass "<reason>"'
+    audit_comment_template: |
+      Bypassed by <name> <<email>>: <reason>
+    examples:
+      - "Merging without an APPROVED review or `Approved` comment"
+      - "Force-pushing a feature branch after a human review landed"
+      - "Opening a PR targeting `main` while the closing issue carries an `Integration:` marker"
+      - "Promoting Todo → Backlog on verbal authorisation without the user touching the Milestone field directly"
+
+  warning:
+    summary: |
+      Agent proceeds but emits a one-line warning. No audit comment
+      required. Used for soft conventions and recommendations where
+      blocking would be heavier than the rule warrants.
+    behaviour: |
+      The agent completes the operation, surfaces a one-line warning
+      summarizing the soft violation, and moves on. Warnings aggregate
+      in the agent's status line; the user can review and act on them
+      at any time. Warnings are non-fatal and never gate a mutation.
+    bypassable: false
+    aborts_operation: false
+    examples:
+      - "Issue title shorter than ~30 chars after `[Type]` prefix"
+      - "Multi-issue PR with mixed `type:*` labels — agent picks dominant and warns"
+      - "EPIC's directly attached children exceed a soft threshold (~10) — recommend grouping"
+      - "Existing Milestone read without a `Close trigger:` marker — infer and prompt to write one"
+      - "Code-path / doc-path mapping mismatch in a PR"

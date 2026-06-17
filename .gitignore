@@ -1,0 +1,35 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Build artifacts (uv build / hatch build / pip wheel)
+build/
+dist/
+
+# OS junk
+.DS_Store
+
+# Personal, per-machine harness settings (team config lives in settings.json)
+.claude/settings.local.json
+
+# ── User-local / generated data — never committed (relevant only to the user) ──
+# Generated output is per-document, written to a sibling <name>.notes/ folder
+# (data/Foo.pdf → data/Foo.pdf.notes/): ingest/extract/compose/export artifacts
+# with verbatim excerpts from local/copyrighted sources. Ignored wherever it lands.
+*.notes/
+data/*/
+# Per-page inspection output: annotated scans (tn render) and page-text dumps
+# (tn probe --out) — both derived from the source PDF.
+scans/
+*.scan.png
+pdf-page-*.txt
+
+# Copyrighted source PDFs — keep local, do not publish.
+# Remove this line if a given PDF is yours to distribute.
+data/*.pdf
+
+# NOTE: committed test fixtures (tests/fixtures/) are project assets, not
+# generated data — the patterns above are scoped so they stay tracked.

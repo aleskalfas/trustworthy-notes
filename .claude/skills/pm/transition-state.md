@@ -1,0 +1,1 @@
+../../../.pkit/capabilities/project-management/skills/pm/transition-state.md

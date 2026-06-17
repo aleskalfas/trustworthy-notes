@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "titles.schema.json",
+  "title": "Title formats per surface (issue, milestone, PR)",
+  "description": "Formal shape of titles.yaml — one entry per title surface (per-issue-type issue titles, milestone titles, PR titles). Each entry carries a regex `pattern` consumers compile, a prose `description`, examples, and per-rule validations tagged with severities. Issue and milestone titles are read for board browsing; PR titles follow Conventional Commits for `git log` parsing. Consumed by the create-issue and validate-body skills at filing and edit time. Companion per COR-018.",
+  "x-pkit-id-collection": "/formats",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "formats"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "refs.schema.json#/$defs/source"
+    },
+    "formats": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/$defs/entry"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Title-format entries. Keys are surface ids (e.g., `issue-epic`, `milestone`, `pr`); values match $defs.entry."
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surface_kind",
+        "pattern",
+        "description",
+        "examples_good",
+        "validations"
+      ],
+      "properties": {
+        "surface_kind": {
+          "type": "string",
+          "enum": ["issue", "milestone", "pr"],
+          "description": "Which surface this title shape applies to. Determines which validations the skill runs (issue → board-browsing checks; pr → Conventional Commits checks)."
+        },
+        "applies_to_issue_type": {
+          "$ref": "issue-types.schema.json#/$defs/issue_type_ref",
+          "description": "When `surface_kind: issue`, the issue type whose title this entry governs. Omitted for `milestone` and `pr` surfaces (which apply to a single global surface)."
+        },
+        "pattern": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Regex (PCRE-compatible) the title must match. `null` for free-form surfaces (e.g., milestone). Consumers compile against the language they run in; if the regex must differ across languages, encode the divergence here explicitly."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-paragraph prose describing the format — what the parts mean, what readers should expect."
+        },
+        "examples_good": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Titles that match the pattern. Illustrative."
+        },
+        "examples_bad": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "title": { "type": "string", "minLength": 1 },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          },
+          "uniqueItems": true,
+          "description": "Titles that should be rejected and why. Helps consumers verify their regex catches the listed cases."
+        },
+        "validations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule", "severity"],
+            "additionalProperties": false,
+            "properties": {
+              "rule": { "type": "string", "minLength": 1 },
+              "severity": {
+                "$ref": "validation-severity.schema.json#/$defs/severity_ref"
+              }
+            }
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Per-rule validations the skill runs against a title on this surface. Each rule is prose paired with a severity token; severity dispatch happens via the validation-severity schema."
+        }
+      },
+      "description": "Per-surface title format."
+    }
+  }
+}

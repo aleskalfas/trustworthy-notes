@@ -1,0 +1,190 @@
+# Issue-body shape per type + universal body rules + checkbox semantics.
+#
+# Per-issue-type required sections (with `## <Name>` headings, checkbox
+# flags, severities); the universal body rules every body must satisfy
+# regardless of type; the optional `Integration:` pre-line shape; the
+# checkbox semantics (validated at tick, hard-stop at close, sticky
+# ticks, two ticked-states); and the sub-task promotion procedure.
+#
+# Consumed by create-issue (generates the right scaffold at filing) and
+# validate-body (checks required sections, universal rules, integration
+# marker shape, checkbox close-gate, sub-task promotion mechanics).
+
+schema_version: 1
+
+source:
+  upstream: pm-workflow
+  commit: 9d1f0237f5d5778ed9811c72f22ae8268e5faff3
+  decisions: [MET-006, MET-009]
+  captured_at: 2026-05-21
+
+bodies:
+  epic:
+    required_sections:
+      - heading: "## Outcome"
+        purpose: |
+          Describes the thesis or de-risking goal — what this EPIC is
+          for at a workstream level.
+        has_checkboxes: false
+        severity: "[validation-severity:hard-reject]"
+      - heading: "## Success criteria"
+        purpose: |
+          Checkboxes describing what proves the thesis. Distinct from
+          acceptance criteria — success is at the EPIC level, not a
+          single capability.
+        has_checkboxes: true
+        severity: "[validation-severity:hard-reject]"
+    optional_section_recommendations:
+      - "## Why"
+      - "## Out of scope"
+      - "## Approach"
+      - "## Related"
+
+  feature:
+    required_sections:
+      - heading: "## What"
+        purpose: |
+          Describes the capability claim — what this Feature delivers.
+        has_checkboxes: false
+        severity: "[validation-severity:hard-reject]"
+      - heading: "## Acceptance criteria"
+        purpose: |
+          Checkboxes describing how the capability is verified. Gate
+          the Feature's close per MET-006.
+        has_checkboxes: true
+        severity: "[validation-severity:hard-reject]"
+    optional_section_recommendations:
+      - "## Why"
+      - "## Out of scope"
+      - "## Dependencies"
+      - "## Approach"
+
+  umbrella:
+    required_sections:
+      - heading: "## Purpose"
+        purpose: |
+          Describes what holds these Tasks together — the theme. No
+          acceptance criteria — Umbrellas don't claim a capability.
+        has_checkboxes: false
+        severity: "[validation-severity:hard-reject]"
+    optional_section_recommendations:
+      - "## Why"
+      - "## Out of scope"
+      - "## Related"
+
+  task:
+    required_sections:
+      - heading: "## What"
+        purpose: |
+          Describes the concrete change this Task makes.
+        has_checkboxes: false
+        severity: "[validation-severity:hard-reject]"
+      - heading: "## Acceptance criteria"
+        purpose: |
+          Checkboxes describing concrete claims tied to code. Gate the
+          Task's close per MET-006.
+        has_checkboxes: true
+        severity: "[validation-severity:hard-reject]"
+      - heading: "## Doc impact"
+        purpose: |
+          Captures which docs change (or asserts no doc impact). Per
+          MET-014 — mandatory on every Task even when no docs change.
+        has_checkboxes: false
+        severity: "[validation-severity:hard-reject]"
+    optional_section_recommendations:
+      - "## Why"
+      - "## Approach"
+      - "## Implementation notes"
+      - "## Related"
+      - "## Out of scope"
+
+universal_body_rules:
+  - rule: |
+      First line of the body is the parent-ref per the issue type's
+      `parent_ref_form` in issue-types.yaml (e.g., `EPIC: #42`). The
+      `Integration:` pre-line — when present — precedes it with no
+      blank line between; the parent-ref is followed by a blank line,
+      then the content.
+    severity: "[validation-severity:hard-reject]"
+  - rule: |
+      No h1 (`# ...`) headings — the issue title is the h1. Sections
+      use `## Title`.
+    severity: "[validation-severity:hard-reject]"
+  - rule: |
+      No `file:line` references like `foo/bar.py:42`. Line numbers go
+      stale; name the file and the identifier separately.
+    severity: "[validation-severity:warning]"
+  - rule: |
+      No `## Implementation` or `## How` recipes. Bodies describe
+      outcomes, not how to build them. Implementation belongs in the
+      PR or a separate design doc.
+    severity: "[validation-severity:warning]"
+  - rule: |
+      No predicted decision IDs (e.g., references to DEC-NNN that
+      haven't been authored yet). Reference only IDs that already
+      exist.
+    severity: "[validation-severity:warning]"
+  - rule: |
+      Checkboxes follow the close-gate rule (every box ticked before
+      Done) and the living-document edit rules (wording free; scope
+      changes gated by author).
+    severity: "[validation-severity:hard-reject]"
+  - rule: |
+      A required checkbox section (has_checkboxes: true) with zero filled
+      items signals an unedited template skeleton. At the first lifecycle
+      transition (Todo → Backlog onward) this is a hard-reject; at create
+      it is a warning. A trailing empty `- [ ]` alongside real filled items
+      is tolerated (lenient). Per DEC-031.
+    severity: "[validation-severity:hard-reject]"
+  - rule: |
+      Surviving template placeholder prose (text derived at runtime from the
+      matching templates/<Type>.md that still appears verbatim in the body)
+      signals an unedited skeleton. Always a warning. Per DEC-031.
+    severity: "[validation-severity:warning]"
+
+integration_marker:
+  pattern: '^Integration: integration/([a-z0-9][a-z0-9-]*[a-z0-9])$'
+  position: |
+    The marker sits on its own line immediately above the parent-ref
+    first line, with no blank line between. When absent, the body
+    opens directly with the parent-ref.
+  agent_managed: true
+  removal_authorisation_severity: "[validation-severity:bypassable-with-audit]"
+
+checkbox_rules:
+  validation_timing: |
+    Every check is an audit record of validation by the actor who
+    ticked it. The agent ticks when it has evidence; the user ticks
+    when they've inspected. Validation happens at the moment of
+    ticking, never re-validated at close.
+  close_gate_severity: "[validation-severity:hard-reject]"
+  ticked_boxes_sticky: true
+  two_kinds:
+    inline_claim:
+      pattern_example: "- [ ] All endpoints respond <100ms p95"
+      ticked_by: |
+        The actor (human or agent) validating the claim. The tick is
+        the audit record; evidence in a comment is courtesy, not
+        required.
+    issue_reference:
+      pattern_example: "- [ ] #99 — Install Claude Code CLI"
+      ticked_by: |
+        Auto-ticked by GitHub when the referenced issue closes. The
+        parent Task cannot close until #99 closes (per MET-006).
+
+sub_task_promotion:
+  description: |
+    A sub-task lives as a markdown checkbox in a Task's body. When it
+    grows up — needs its own PR, owner, discussion, or labels — the
+    agent promotes it to a standalone Task.
+  new_task_parent_rule: |
+    The new Task's parent is the *original Task's parent* (Feature,
+    Umbrella, or EPIC) — not the original Task itself. Tasks contain
+    only markdown sub-tasks, not other issues (per the containment
+    invariants in issue-types.yaml).
+  original_task_body_update: |
+    The original Task's body has the plain checkbox replaced with a
+    task-list reference: `- [ ] foo` becomes `- [ ] #<N> foo` where
+    `<N>` is the promoted Task's number. GitHub auto-ticks
+    `- [ ] #<N>` when the promoted Task closes; the original Task
+    can't close until the promoted Task closes (per MET-006).

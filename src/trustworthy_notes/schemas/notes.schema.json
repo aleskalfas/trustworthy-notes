@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trustworthy-notes/notes.schema.json",
+  "title": "Trustworthy Notes",
+  "description": "The mechanical encoding of METHODOLOGY §8. A notes-set extracted from one source page: terms (vocabulary), a separate evidence store (records stored once, referenced by id), statements (atomic notes that reference evidence), and relations (the reasoning links). A project-local SUPERSET of the pkit evidence-record shape (§9): same record concept, plus the structured source fields (page/stream/locator/bbox) the kit record lacks. Methodology is the source of truth; this schema changes only when METHODOLOGY does. Note: this schema enforces SHAPE only. Referential integrity (§7.4) and kind-aware traceability (§7.2) are code-enforced validity checks, not expressible here.",
+  "type": "object",
+  "required": ["schema_version", "source", "evidence", "statements"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "terms": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/term"},
+      "default": [],
+      "description": "The document-global term store (METHODOLOGY §4.1). In a multi-file run this is a separate document-level artifact that page/chapter notes-sets reference; a single self-contained notes-set may inline it here. Term identity is reconciled at compose."
+    },
+    "evidence": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidence"},
+      "description": "The evidence store. Records are stored once here and referenced by id from statements (METHODOLOGY §4.4)."
+    },
+    "statements": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/statement"},
+      "default": []
+    },
+    "relations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/relation"},
+      "default": []
+    }
+  },
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Kebab-case stable identifier (used where the kind isn't fixed, e.g. relation endpoints which may be a statement or a term)."
+    },
+    "term_id": {
+      "type": "string",
+      "pattern": "^t-[a-z0-9][a-z0-9-]*$",
+      "description": "Term id — kind-prefixed 't-' (METHODOLOGY §4.5)."
+    },
+    "statement_id": {
+      "type": "string",
+      "pattern": "^s-[a-z0-9][a-z0-9-]*$",
+      "description": "Statement id — kind-prefixed 's-' (METHODOLOGY §4.5)."
+    },
+    "evidence_id": {
+      "type": "string",
+      "pattern": "^e-[a-z0-9][a-z0-9-]*$",
+      "description": "Evidence id — kind-prefixed 'e-' (METHODOLOGY §4.5)."
+    },
+    "source": {
+      "type": "object",
+      "description": "The origin document and the span these notes cover. 'scope' is page (intermediate, one per page) or chapter (the composed deliverable) — METHODOLOGY §4.6. Chapter scope is reserved (chapter notes not produced yet).",
+      "required": ["document"],
+      "additionalProperties": false,
+      "properties": {
+        "document": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable citation of the source document."
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["page", "chapter"],
+          "default": "page",
+          "description": "Span this notes-set covers (METHODOLOGY §4.6)."
+        },
+        "page_label": {
+          "type": "string",
+          "description": "The printed page number a scholar would cite (e.g. '3'). Page scope."
+        },
+        "page_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based PDF page index we resolve evidence against (e.g. 13). Required for page scope."
+        },
+        "chapter_id": {
+          "type": "string",
+          "description": "Chapter identifier (chapter scope)."
+        },
+        "chapter_title": {
+          "type": "string",
+          "description": "Human-readable chapter title (chapter scope)."
+        },
+        "page_range": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0},
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[start_index, end_index] of 0-based PDF pages composed into this chapter. Required for chapter scope."
+        }
+      },
+      "allOf": [
+        {
+          "comment": "page scope (explicit or default-by-omission) requires page_index.",
+          "if": {
+            "anyOf": [
+              {"not": {"required": ["scope"]}},
+              {"properties": {"scope": {"const": "page"}}, "required": ["scope"]}
+            ]
+          },
+          "then": {"required": ["page_index"]}
+        },
+        {
+          "comment": "chapter scope requires a page_range (reserved).",
+          "if": {"properties": {"scope": {"const": "chapter"}}, "required": ["scope"]},
+          "then": {"required": ["page_range"]}
+        }
+      ]
+    },
+    "term": {
+      "type": "object",
+      "description": "A named concept/word the document uses. NOT an assertion (METHODOLOGY §4.1).",
+      "required": ["id", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/term_id"},
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The term as it reads, e.g. 'annuity contract (sX n sanx)'."
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "description": "One verifiable pointer into the source, stored once and referenced by id (METHODOLOGY §4.4, §6). Discriminated by 'kind'. Only 'text' is fully built; 'figure'/'table' are reserved.",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/evidence_id"},
+        "kind": {
+          "type": "string",
+          "enum": ["text", "figure", "table"],
+          "default": "text",
+          "description": "What sort of source evidence this is (METHODOLOGY §4.4)."
+        },
+        "excerpt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Verbatim text copied from the source stream. Required for kind=text."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["body", "footnote"],
+          "description": "Which extracted stream to resolve against. Required for kind=text."
+        },
+        "script": {
+          "type": "string",
+          "default": "latin",
+          "description": "Writing system of a text excerpt (METHODOLOGY §4.4). Open vocabulary; common values: 'latin' (default), 'egyptian-transliteration'. Transliteration signs are restored to Unicode at ingest (MdC: T=ṯ, H=ḥ, …)."
+        },
+        "locator": {
+          "type": "string",
+          "description": "Footnote marker (e.g. '11'), figure/table number, or section label."
+        },
+        "caption": {
+          "type": "string",
+          "description": "Verbatim caption for a figure/table; verified as text when present."
+        },
+        "bbox": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "Region [x0, top, x1, bottom] on the page for a figure/table."
+        },
+        "page_label": {
+          "type": "string",
+          "description": "Printed page label; omit to inherit from source.page_label."
+        },
+        "page_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based PDF page; omit to inherit from source.page_index. Set only for cross-page evidence."
+        }
+      },
+      "allOf": [
+        {
+          "comment": "kind=text (explicit or default-by-omission) requires a verbatim excerpt and a source stream (METHODOLOGY §6).",
+          "if": {
+            "anyOf": [
+              {"not": {"required": ["kind"]}},
+              {"properties": {"kind": {"const": "text"}}, "required": ["kind"]}
+            ]
+          },
+          "then": {"required": ["excerpt", "source"]}
+        }
+      ]
+    },
+    "statement": {
+      "type": "object",
+      "description": "An atomic note: one piece of knowledge, typed, grounded by >=1 evidence reference (METHODOLOGY §4.2, §5).",
+      "required": ["id", "type", "text", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/statement_id"},
+        "type": {
+          "type": "string",
+          "enum": [
+            "definition",
+            "claim",
+            "method",
+            "question",
+            "background"
+          ],
+          "description": "What KIND of knowledge this is (METHODOLOGY §5, type axis)."
+        },
+        "basis": {
+          "type": "string",
+          "enum": ["author", "author-data", "reported"],
+          "default": "author",
+          "description": "WHO asserts it and on what grounds (METHODOLOGY §5, basis axis). 'author-data' is a finding; 'reported' is a reported claim. Omit to mean 'author'."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Our wording of the idea; may paraphrase. The verbatim copy lives in the referenced evidence, never here."
+        },
+        "terms": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/term_id"},
+          "description": "ids of terms this statement is about (must be 't-'). Existence is a code-enforced check (§7.4).",
+          "default": []
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/evidence_id"},
+          "description": "ids into the evidence store (must be 'e-'). At least one is mandatory (§7.1). Existence is a code-enforced check (§7.4)."
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "description": "A labelled link that keeps the reasoning intact (METHODOLOGY §4.3, §5).",
+      "required": ["from", "to", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {"$ref": "#/$defs/slug"},
+        "to": {"$ref": "#/$defs/slug"},
+        "type": {
+          "type": "string",
+          "enum": [
+            "defines",
+            "supports",
+            "contrasts",
+            "elaborates",
+            "exemplifies",
+            "motivates"
+          ]
+        }
+      }
+    }
+  }
+}

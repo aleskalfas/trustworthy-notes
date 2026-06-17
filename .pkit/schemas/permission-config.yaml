@@ -1,0 +1,14 @@
+# Permission ownership + posture config (per COR-028) — the project's permission mode.
+#
+# `ownership_mode` governs how much of the adopter's harness config the realizer
+# owns: `additive` (default — the realizer only adds, never replaces; the adopter
+# keeps control) or `managed` (the realizer owns + regenerates its settings
+# region, healing drift; requires the COR-002 authoritative-region tier).
+# `posture` governs the default for unmodeled requests: `lenient` (default — the
+# hook abstains, deferring to the harness's normal flow) or `strict` (unmodeled
+# requests are denied). Adopter-owned project state; set via `pkit permissions mode`.
+
+schema_version: 1
+
+ownership_mode: additive
+posture: lenient

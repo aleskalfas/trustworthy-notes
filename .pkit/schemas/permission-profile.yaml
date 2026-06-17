@@ -1,0 +1,27 @@
+# Permission profile — a named, selectable autonomy level (per ADR-005 / COR-028).
+#
+# A profile bundles a permission `posture` + a layered per-agent `grants` source.
+# One profile is active per project (`active_profile` in permission-config);
+# `pkit permissions profile activate <name>` sets the posture and LAYERS these grants
+# under the adopter's own grants.yaml — it never overwrites manual grants (the
+# model unions: catalog guardrail denies + profile grants + adopter grants, with
+# the adopter last and deny-wins throughout). The profile's name is its filename:
+# shipped tiers live in .pkit/permissions/profiles/<name>.yaml, project profiles
+# in .pkit/permissions/project/profiles/<name>.yaml (same name overrides).
+#
+# Confinement (the OS sandbox for prompt-free scripting) is REFERENCED in a
+# profile's description, not written by the minimal profile — ADR-005 defers the
+# sandbox writer to its substrate. This file is the schema's reference instance.
+
+schema_version: 1
+
+description: Domain work without destructive power — vcs, issue-tracker, kit, repo-read.
+posture: lenient
+grants:
+  - subject: all
+    privilege:
+      - "[privilege-catalog:vcs]"
+      - "[privilege-catalog:issue-tracker]"
+      - "[privilege-catalog:kit]"
+      - "[privilege-catalog:repo-read]"
+    effect: allow

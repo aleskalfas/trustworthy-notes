@@ -1,0 +1,119 @@
+# pm-issue-check — methodology post-check workflow (per project-management:DEC-019).
+#
+# Detects issues filed outside the methodology — via the GitHub UI or
+# raw `gh issue create` — and surfaces drift against the rules encoded
+# in `schemas/mandatory-issue-state.yaml`. Posts a comment + a status
+# check. With AUTO_REMEDIATE: true, also invokes the analogous
+# remediation mutation (e.g. `gh project item-add` for missing board
+# membership).
+#
+# Adopter-installed: copy this file to `.github/workflows/` in your
+# own repo. The kit-shipped path under
+# `.pkit/capabilities/project-management/templates/.github/workflows/`
+# is canonical; the adopter's copy is operational.
+#
+# Tunables (set under `env:` below):
+#   - AUTO_REMEDIATE: 'true' to auto-add to board / auto-assign filer.
+#       Default 'false' — comment + status check only.
+#   - PM_PROJECT_BOARD_OWNER: required when AUTO_REMEDIATE='true' and
+#       config.has_projects_v2_board==true. The owner the board lives
+#       under (org or user login).
+
+name: pm-issue-check
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+      - reopened
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  AUTO_REMEDIATE: 'false'
+  # PM_PROJECT_BOARD_OWNER: ''   # uncomment + set when AUTO_REMEDIATE='true'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run pm validate-issue
+        id: validate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -eo pipefail
+          if [ ! -f .pkit/capabilities/project-management/scripts/validate-issue.py ]; then
+            echo "::warning::project-management capability not installed; skipping."
+            exit 0
+          fi
+          # Install uv on the fly (the script uses PEP 723 inline metadata).
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.cargo/bin:$PATH"
+          set +e
+          uv run --script .pkit/capabilities/project-management/scripts/validate-issue.py \
+            "$ISSUE_NUMBER" --json > /tmp/validate.json
+          rc=$?
+          set -e
+          cat /tmp/validate.json
+          if [ $rc -ne 0 ]; then
+            echo "blocking=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post findings as a comment
+        if: always() && steps.validate.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -e
+          if [ ! -f /tmp/validate.json ]; then
+            exit 0
+          fi
+          # Render a brief comment (jq if available; fall back to raw JSON).
+          if command -v jq >/dev/null 2>&1; then
+            count=$(jq '.findings | length' /tmp/validate.json)
+            if [ "$count" -gt 0 ]; then
+              body="[pm-issue-check] $count finding(s) on this issue:\n\n"
+              while IFS= read -r line; do
+                body+="- $line\n"
+              done < <(jq -r '.findings[] | "[\(.severity)] \(.label): \(.detail)"' /tmp/validate.json)
+              body+="\nFix locally with \`pkit project-management validate-issue $ISSUE_NUMBER\` then \`edit-issue\`."
+              gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$body")"
+            fi
+          else
+            gh issue comment "$ISSUE_NUMBER" --body "[pm-issue-check] see job logs."
+          fi
+
+      - name: Auto-remediate board membership
+        if: env.AUTO_REMEDIATE == 'true' && steps.validate.outputs.blocking == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+        run: |
+          # Best-effort auto-add to the configured board. Reads board id
+          # + owner from the adopter's project/config.yaml.
+          set -e
+          BOARD_ID=$(python3 -c "import yaml,sys; d=yaml.safe_load(open('.pkit/capabilities/project-management/project/config.yaml'));print(d.get('projects_v2_board_id',''))")
+          if [ -n "$BOARD_ID" ] && [ -n "$PM_PROJECT_BOARD_OWNER" ]; then
+            gh project item-add "$BOARD_ID" --owner "$PM_PROJECT_BOARD_OWNER" --url "$ISSUE_URL"
+          else
+            echo "::warning::AUTO_REMEDIATE=true but board id or owner not set; skipping."
+          fi
+
+      - name: Fail on blocking findings
+        if: steps.validate.outputs.blocking == 'true'
+        run: |
+          echo "::error::pm-issue-check found blocking validation findings."
+          exit 1

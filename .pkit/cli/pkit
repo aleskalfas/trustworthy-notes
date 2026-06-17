@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+#
+# pkit — thin proxy to the Python runtime.
+#
+# This dispatcher exists so the kit's binary path stays at .pkit/cli/pkit
+# (per PRJ-001) regardless of how the kit was installed. Two roles:
+#
+#   1. Adapter primitives (`deploy-skills`, `merge-settings`) bypass the
+#      runtime — they're shell scripts the adapter ships and owns. The
+#      proxy resolves the project root and execs them directly.
+#
+#   2. Everything else routes to the Python runtime via `uv run`. The
+#      runtime owns the COR-004 surface (init, sync, merge, upgrade,
+#      bundle, validate, new, status, version, ...).
+#
+# `uv` and Python 3.11+ are required (per PRJ-003). The recommended
+# install is `uv tool install git+ssh://git@github.com/aleskalfas/
+# project-kit.git` (per PRJ-004), which puts a binary on PATH that doesn't
+# need this proxy at all. This proxy stays useful for the project-kit
+# source tree (where `uv run` resolves the in-tree Python via uv's
+# `--project` flag) and for adopters running pre-install bootstrap.
+#
+# Older bash command implementations were removed during the Python port
+# step 3 (umbrella #28). See git history for archaeology.
+
+set -euo pipefail
+
+# --- Resolve own location through symlinks --------------------------------
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+    link_target="$(readlink "$SCRIPT_PATH")"
+    case "$link_target" in
+        /*) SCRIPT_PATH="$link_target" ;;
+        *)  SCRIPT_PATH="$(dirname "$SCRIPT_PATH")/$link_target" ;;
+    esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+SOURCE_KIT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_REPO="$(dirname "$SOURCE_KIT")"
+
+# --- Helpers --------------------------------------------------------------
+
+find_target_root() {
+    local root
+    root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "${root:-}" ]; then
+        echo "$root"
+        return 0
+    fi
+    local cur
+    cur="$(pwd)"
+    while [ "$cur" != "/" ]; do
+        # `.git` may be a directory (normal repo) or a file (worktree
+        # marker). Either form counts as a tree boundary.
+        if [ -e "$cur/.git" ] || [ -d "$cur/.pkit" ]; then
+            echo "$cur"
+            return 0
+        fi
+        cur="$(dirname "$cur")"
+    done
+    return 1
+}
+
+# --- Adapter primitives bypass the runtime -------------------------------
+
+case "${1:-}" in
+    deploy-skills | merge-settings)
+        target_root="$(find_target_root)" || {
+            echo "Error: not inside a project tree (no .git directory above CWD)." >&2
+            exit 1
+        }
+        if [ ! -d "$target_root/.pkit" ]; then
+            cat >&2 <<EOF
+Error: this project does not have project-kit installed (no .pkit/ directory).
+       Run 'pkit init' from this project's root to install.
+EOF
+            exit 1
+        fi
+        exec "$target_root/.pkit/adapters/claude-code/${1}.sh" "${@:2}"
+        ;;
+esac
+
+# --- Everything else routes to the Python runtime ------------------------
+
+if ! command -v uv >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+Error: pkit requires `uv` (per PRJ-003 + PRJ-004). Install uv via:
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+or:
+   brew install uv
+Then either retry this command or install pkit globally:
+   uv tool install git+ssh://git@github.com/aleskalfas/project-kit.git
+EOF
+    exit 1
+fi
+
+if [ ! -f "$SOURCE_REPO/pyproject.toml" ]; then
+    cat >&2 <<EOF
+Error: source kit at $SOURCE_REPO has no pyproject.toml.
+       This dispatcher needs to resolve to a project-kit source tree
+       with the Python package present. If you're running from an
+       adopter project's local copy of this script, install pkit
+       globally instead:
+         uv tool install git+ssh://git@github.com/aleskalfas/project-kit.git
+EOF
+    exit 1
+fi
+
+# `--project` points uv at pyproject.toml without changing the shell's
+# cwd, so commands that resolve the user's working directory (e.g.,
+# `find_target_root` for `init` / `status` / `sync` / etc.) see the
+# right path. `PKIT_SOURCE_BIN` carries this dispatcher's resolved path
+# through to Python so `pkit status` reports the binary the user
+# actually invoked.
+PKIT_SOURCE_BIN="$SCRIPT_PATH" exec uv run --quiet --project "$SOURCE_REPO" python -m project_kit "$@"
