@@ -69,6 +69,16 @@ The hook **script** itself is a propagated adapter file — `pkit sync` owns its
 
 **`pkit permissions sandbox enable`** sets `failIfUnavailable: true` always (the ADR-004 / ADR-014 §6 fail-closed invariant), so Claude Code refuses to start an unconfined session rather than silently running without a box. It also runs the enforcement-runtime self-check (same as `enable`) AND verifies **actual confinement** — attempts a write outside the workspace that Seatbelt/bubblewrap must deny. If the write succeeds, it warns "sandbox configured ON but NOT actually confining" loudly (box may not have initialized, or the session hasn't been restarted). `pkit permissions sandbox status` and `pkit permissions overview` report the same actual-confinement probe result so the operator never believes confinement is active when it is not.
 
+### Prompt-free command shape under the sandbox
+
+This is the Claude Code realization of the universal "work with the permission layer, not around it" rule (`.pkit/rules/core.md`). With the sandbox on, `.claude/settings.json` carries `sandbox.autoAllowBashIfSandboxed: true` — so a **single, simple Bash command auto-allows** because it runs inside the box, no prompt. What still prompts is the command *shape* the parser can't statically vet: a leading `cd`, statements chained with `;`, pipelines (`| grep | head`), and command substitution. Those fall back to a confirmation even under the sandbox, and an allow-list entry for the inner tool does not help (the parser keys on the outer/first token). So the agent's discipline is: **one clean command per call; the harness's `Read` / `Grep` / `Glob` / `Write` tools for inspection and file I/O — not `cat`/`sed`/heredocs/pipelines.**
+
+For a genuinely multi-step diagnostic, compose the complexity into a file and run it as one invocation: author the script with the `Write` tool (prompt-free, and the call shows its contents), then run a single `bash <file>`. The parser sees only that one clean command; the box auto-allows it; the multi-step logic runs *inside* the sandbox.
+
+**Caveat — this is for read-only diagnostics only.** Wrapping commands in a script **bypasses the PreToolUse hook**: the hook inspects the outer `bash <file>` invocation, not the script's contents, so a gated mutation hidden inside a script (e.g. a raw `gh issue edit` the model denies) slips past the check. The OS sandbox still bounds the script at the OS level, but the hook's *intent* denies are policy, not OS-enforced (ADR-004 §61 — the allowlist is not a security boundary). So never use the script-wrap mechanic to run mutations the model gates; those go through the validated capability scripts, which the hook sees and the model checks.
+
+When a diagnostic recurs, it graduates from a `/tmp` throwaway into a committed project command (or a `pkit` subcommand for repo-agnostic ones) per the core rule's COR-007 extraction.
+
 ### `permission-enforcement.yaml`
 
 The per-adapter enforcement-capability declaration (per COR-028): which dimensions of the permission model this harness realizes natively, via the hook (runtime, fail-open), or not at all (reported for the OS/container layer). `pkit permissions diff` reads it to label declared intent the harness cannot faithfully enforce.

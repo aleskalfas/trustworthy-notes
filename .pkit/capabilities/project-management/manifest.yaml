@@ -3,6 +3,6 @@ component:
   kind: capability
   name: project-management
   version: 0.23.2
-  installed_at: '2026-06-17T08:39:57.446741+00:00'
+  installed_at: '2026-06-17T19:38:36.574952+00:00'
 requires_backbone: '>=1.26.0,<2.0.0'
 backend_state: {}

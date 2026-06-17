@@ -1,5 +1,5 @@
 schema_version: 1
-backbone_version: 1.90.0
+backbone_version: 1.92.0
 components:
   - kind: adapter
     name: claude-code
@@ -10,3 +10,6 @@ components:
   - kind: capability
     name: project-management
     manifest: .pkit/capabilities/project-management/manifest.yaml
+  - kind: capability
+    name: software-engineering
+    manifest: .pkit/capabilities/software-engineering/manifest.yaml

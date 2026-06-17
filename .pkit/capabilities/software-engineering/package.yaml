@@ -1,0 +1,7 @@
+schema_version: 1
+component:
+  kind: capability
+  name: software-engineering
+  version: 0.1.0
+description: Authoring code under a project's own conventions — ships the software-engineer producer agent.
+requires_backbone: ">=1.0.0,<2.0.0"

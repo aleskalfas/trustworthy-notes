@@ -1,0 +1,8 @@
+schema_version: 1
+component:
+  kind: capability
+  name: software-engineering
+  version: 0.1.0
+  installed_at: '2026-06-17T19:39:02.363082+00:00'
+requires_backbone: '>=1.0.0,<2.0.0'
+backend_state: {}
