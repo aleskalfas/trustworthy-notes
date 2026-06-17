@@ -1,17 +1,17 @@
-# Workstreams for project-kit (per [project-management:DEC-018-workstream-taxonomy-and-lifecycle]).
-# Single-product project — workstreams are sub-areas of the methodology.
+# Workstreams for trustworthy-notes (per [project-management:DEC-018-workstream-taxonomy-and-lifecycle]).
+# Single-product project — workstreams are the durable domain areas of the wave
+# pipeline plus cross-cutting concerns. A workstream is a long-lived domain area
+# (DEC-018), so time phases like "development → adoption" are Milestones, not
+# workstreams. Evolve this set with the add/rename/merge/split/remove operations.
 
 schema_version: 1
 
 workstreams:
-  - capabilities
-  - schemas
-  - cli
-  - decisions
-  - workflow
-  - adapters
-  - agents
-  - skills
-  - lifecycle
-  - evidence
-  - tests
+  - ingest        # Wave 0 — PDF → page text / layout
+  - extract       # Wave 1 — notes from text (Claude)
+  - compose       # Wave 2 — dedup / terms / relations / assemble
+  - validate      # Wave 3 — §7 grounding / traceability checks
+  - export        # Wave 4 — study docs, book, PDF rendering
+  - cli           # the `tn` command surface
+  - methodology   # METHODOLOGY / ARCHITECTURE + the notes schema
+  - infra         # packaging, fonts, tooling, tests
