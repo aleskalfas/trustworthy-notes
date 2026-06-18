@@ -43,7 +43,26 @@ tnotes --help
 `mise`/`ant` are **not** required for this. They're only for the optional
 account-login path (`tnotes auth login`); see Platform below.
 
-## Usage (today)
+## One command (the whole pipeline)
+
+For the non-technical path, point `tnotes` at a PDF — no subcommand — and it runs
+every stage end-to-end (extract → compose → export → book) and writes the finished
+book beside the source:
+
+```
+tnotes INPUT.pdf                 # → INPUT.tnotes.pdf (clean prose reading copy)
+tnotes INPUT.pdf -p 1-30         # just pages 1–30 → INPUT.p1-30.tnotes.pdf
+tnotes INPUT.pdf --cite          # the anchored copy: [s-N] markers + Notes & Sources
+tnotes INPUT.pdf --force         # regenerate every stage (default: skip finished ones)
+```
+
+Already-finished stages are skipped, so a re-run resumes where it left off (use
+`--force` to redo everything). A single-section document (e.g. a paper with no
+chapter headers) still produces a book — no flags needed. Connect to Claude once
+with `tnotes auth set-key` first. For per-stage control, the subcommands below
+remain available and unchanged.
+
+## Usage (per-stage)
 
 Wave 0 (ingest) and layout inspection are built; the extraction waves are in
 progress. Useful commands now:
