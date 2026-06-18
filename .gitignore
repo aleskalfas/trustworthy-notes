@@ -20,13 +20,20 @@ src/trustworthy_notes/_build_stamp.py
 .claude/settings.local.json
 
 # ── User-local / generated data — never committed (relevant only to the user) ──
-# Generated output is per-document, written to a sibling <name>.notes/ folder
-# (data/Foo.pdf → data/Foo.pdf.notes/): ingest/extract/compose/export artifacts
+# Generated output is per-document, written to a sibling <name>.tnotes/ folder
+# (data/Foo.pdf → data/Foo.pdf.tnotes/): ingest/extract/compose/export artifacts
 # with verbatim excerpts from local/copyrighted sources. Ignored wherever it lands.
-*.notes/
+*.tnotes/
 data/*/
-# Per-page inspection output: annotated scans (tn render) and page-text dumps
-# (tn probe --out) — both derived from the source PDF.
+# The combined book is written beside the source as <stem>.tnotes.md/.pdf
+# (and the reading copy <stem>.tnotes.reading.md/.pdf) — same generated, derived
+# content as the folder above, so ignore it wherever it lands.
+*.tnotes.md
+*.tnotes.pdf
+*.tnotes.reading.md
+*.tnotes.reading.pdf
+# Per-page inspection output: annotated scans (tnotes render) and page-text dumps
+# (tnotes probe --out) — both derived from the source PDF.
 scans/
 *.scan.png
 pdf-page-*.txt

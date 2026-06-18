@@ -1,4 +1,4 @@
-"""Command-line interface for tn (trustworthy-notes)."""
+"""Command-line interface for tnotes (trustworthy-notes)."""
 
 from __future__ import annotations
 
@@ -14,16 +14,16 @@ from . import config, ingest, workspace
 
 app = typer.Typer(
     add_completion=False,
-    help="tn — trustworthy, evidence-anchored notes from PDF documents.",
+    help="tnotes — trustworthy, evidence-anchored notes from PDF documents.",
 )
 
-auth_app = typer.Typer(help="Connect tn to Claude (so you don't touch API keys or env vars).")
+auth_app = typer.Typer(help="Connect tnotes to Claude (so you don't touch API keys or env vars).")
 app.add_typer(auth_app, name="auth")
 
 
 @auth_app.command("set-key")
 def auth_set_key():
-    """Save an Anthropic API key for tn to use (stored privately in your home)."""
+    """Save an Anthropic API key for tnotes to use (stored privately in your home)."""
     key = typer.prompt("Paste your Anthropic API key", hide_input=True).strip()
     if not key:
         typer.echo("No key entered — nothing saved.", err=True)
@@ -35,24 +35,24 @@ def auth_set_key():
         privacy = "chmod 600"
     typer.echo(
         f"Saved to {config.config_file()} ({privacy}, in your home — never in the repo). "
-        f"tn will use this key."
+        f"tnotes will use this key."
     )
 
 
 @auth_app.command("status")
 def auth_status():
-    """Show how tn will authenticate to Claude."""
+    """Show how tnotes will authenticate to Claude."""
     source = config.auth_source()
-    typer.echo(f"tn saved key : {'yes (' + str(config.config_file()) + ')' if config.get_api_key() else 'no'}")
+    typer.echo(f"tnotes saved key : {'yes (' + str(config.config_file()) + ')' if config.get_api_key() else 'no'}")
     typer.echo(f"env API key  : {'set' if os.environ.get('ANTHROPIC_API_KEY') else 'not set'}")
     typer.echo(f"account login: {'present' if (Path.home() / '.config' / 'anthropic').exists() else 'none'}")
     label = {
-        "config": "your saved key (tn auth set-key)",
+        "config": "your saved key (tnotes auth set-key)",
         "env": "the ANTHROPIC_API_KEY in your shell",
         "login": "your account login (ant auth login)",
-        "none": "NOTHING — run `tn auth set-key` or `tn auth login`",
+        "none": "NOTHING — run `tnotes auth set-key` or `tnotes auth login`",
     }[source]
-    typer.echo(f"→ tn will use: {label}")
+    typer.echo(f"→ tnotes will use: {label}")
 
 
 @auth_app.command("login")
@@ -67,14 +67,14 @@ def auth_login():
         }.get(system, "see https://github.com/anthropics/anthropic-cli/releases")
         typer.echo("Account login needs Anthropic's `ant` helper, which isn't installed.")
         typer.echo(f"Install it:  {install}")
-        typer.echo("Then run again:  tn auth login")
-        typer.echo("Or skip all this and use an API key (works everywhere):  tn auth set-key")
+        typer.echo("Then run again:  tnotes auth login")
+        typer.echo("Or skip all this and use an API key (works everywhere):  tnotes auth set-key")
         raise typer.Exit(1)
     subprocess.run(["ant", "auth", "login"], check=False)
     if config.get_api_key() or os.environ.get("ANTHROPIC_API_KEY"):
         typer.echo(
             "\nNote: a saved/env API key takes precedence over the login. "
-            "Run `tn auth clear-key` and `unset ANTHROPIC_API_KEY` to use the login.",
+            "Run `tnotes auth clear-key` and `unset ANTHROPIC_API_KEY` to use the login.",
             err=True,
         )
 
@@ -86,7 +86,7 @@ def auth_clear_key():
     typer.echo("Cleared the saved key.")
 
 
-config_app = typer.Typer(help="Set tn's defaults (extraction model and effort), stored in your home.")
+config_app = typer.Typer(help="Set tnotes's defaults (extraction model and effort), stored in your home.")
 app.add_typer(config_app, name="config")
 
 
@@ -122,7 +122,7 @@ def config_show():
     typer.echo(f"config file : {config.config_file()}")
     typer.echo(f"model : {model}  (from {model_src})")
     typer.echo(f"effort: {effort_shown}  (from {effort_src})")
-    typer.echo("A --model/--effort flag on `tn extract` overrides these.")
+    typer.echo("A --model/--effort flag on `tnotes extract` overrides these.")
 
 
 def _parse_pages(spec: str, max_page: int) -> list[int]:
@@ -171,7 +171,7 @@ def extract(
     ),
     out: Path = typer.Option(
         None, "--out", "-o", file_okay=False,
-        help="Output dir. Default: a folder beside the PDF (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Output dir. Default: a folder beside the PDF (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     window: int = typer.Option(1, "--window", "-w", help="Neighbour text pages of context each side."),
     model: str = typer.Option(
@@ -201,7 +201,7 @@ def extract(
 ):
     """Wave 1: extract trustworthy notes from one or more pages with Claude.
 
-    Set up auth once with `tn auth set-key` (or `tn auth login`). Each page is one
+    Set up auth once with `tnotes auth set-key` (or `tnotes auth login`). Each page is one
     LLM call. Output is per-page notes; composing pages into a chapter is not
     built yet.
     """
@@ -216,8 +216,8 @@ def extract(
 
     if config.auth_source() == "none":
         typer.echo(
-            "tn isn't connected to Claude yet. Run `tn auth set-key` (API key) "
-            "or `tn auth login` (your account) first.",
+            "tnotes isn't connected to Claude yet. Run `tnotes auth set-key` (API key) "
+            "or `tnotes auth login` (your account) first.",
             err=True,
         )
         raise typer.Exit(1)
@@ -450,7 +450,7 @@ def gap(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Dir of page-NNNN.notes.yaml files. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Dir of page-NNNN.notes.yaml files. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     pages: str = typer.Option(None, "--pages", "-p", help="Pages to check; default: all notes found."),
     threshold: float = typer.Option(
@@ -459,7 +459,7 @@ def gap(
     below: float = typer.Option(
         None, "--below",
         help="Re-do list mode: list only pages whose BODY coverage is below this fraction, "
-        "with a ready-to-paste --pages spec (e.g. `tn gap PDF --below 0.8` → pages to re-run at higher effort).",
+        "with a ready-to-paste --pages spec (e.g. `tnotes gap PDF --below 0.8` → pages to re-run at higher effort).",
     ),
     all_sections: bool = typer.Option(
         False, "--all-sections",
@@ -484,7 +484,7 @@ def gap(
 
     notes_dir = workspace.work_dir(input, notes_dir)
     if not notes_dir.is_dir():
-        typer.echo(f"notes dir {notes_dir} does not exist — run `tn extract` first", err=True)
+        typer.echo(f"notes dir {notes_dir} does not exist — run `tnotes extract` first", err=True)
         raise typer.Exit(1)
 
     def render() -> str:
@@ -549,13 +549,13 @@ def gap(
             head += [
                 "",
                 "These prose pages likely have missed content — re-extract them at higher effort:",
-                f'  tn extract "{input}" --pages {spec} -e medium',
+                f'  tnotes extract "{input}" --pages {spec} -e medium',
             ]
         return "\n".join(head)
 
     params = f"below={below};threshold={threshold};pages={pages};all_sections={all_sections}"
     fp = report.inputs_fingerprint(input, notes_dir, params=params)
-    report.emit(workspace.validate_dir(notes_dir) / "gaps.txt", fp, force, render, label="tn gap")
+    report.emit(workspace.validate_dir(notes_dir) / "gaps.txt", fp, force, render, label="tnotes gap")
 
 
 @app.command()
@@ -563,7 +563,7 @@ def stitches(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     full: bool = typer.Option(False, "--full", help="Show the complete stitched quote, not a snippet."),
     force: bool = typer.Option(False, "--force", "-f", help="Regenerate even if the saved view is still fresh."),
@@ -598,7 +598,7 @@ def stitches(
         return "\n".join(out)
 
     fp = report.inputs_fingerprint(input, notes_dir, params=f"full={full}")
-    report.emit(workspace.compose_stage_dir(notes_dir, "stitches") / "stitches.txt", fp, force, render, label="tn stitches")
+    report.emit(workspace.compose_stage_dir(notes_dir, "stitches") / "stitches.txt", fp, force, render, label="tnotes stitches")
 
 
 @app.command()
@@ -606,7 +606,7 @@ def book(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     style: str = typer.Option("outline", "--style", "-s", help="Which exported style to combine."),
     prose_only: bool = typer.Option(
@@ -616,18 +616,19 @@ def book(
     no_citations: bool = typer.Option(
         False, "--no-citations/--citations",
         help="Strip [s-N] citations and the Notes & Sources appendix for a clean reading copy "
-             "(writes book.reading.md/.pdf). Default keeps citations (book.md/.pdf).",
+             "(writes <stem>.tnotes.reading.md/.pdf). Default keeps citations (<stem>.tnotes.md/.pdf).",
     ),
 ):
-    """Combine the per-chapter exports into one navigable book (book.md + book.pdf).
+    """Combine the per-chapter exports into one navigable book beside the source PDF.
 
     Concatenates 4-export/chapter-*.<style>.md into a single document with a master
     hierarchical Contents and namespaced cross-chapter links, and renders one
-    interactive PDF. Chapter titles come from the composed notes-sets. Prose
-    chapters only by default (--all to include reference sections). With
-    --no-citations, also drops the [s-N] markers and Notes & Sources for a clean
-    read-through (book.reading.*), leaving the cited book.* as the authority. Run
-    `tn export --pdf` first. No API calls.
+    interactive PDF. The book is written beside the source as <stem>.tnotes.md and
+    <stem>.tnotes.pdf (e.g. data/Foo.pdf → data/Foo.tnotes.pdf). Chapter titles come
+    from the composed notes-sets. Prose chapters only by default (--all to include
+    reference sections). With --no-citations, also drops the [s-N] markers and Notes
+    & Sources for a clean read-through (<stem>.tnotes.reading.*), leaving the cited
+    <stem>.tnotes.* as the authority. Run `tnotes export --pdf` first. No API calls.
     """
     import yaml as _yaml
 
@@ -637,7 +638,7 @@ def book(
     exdir = workspace.export_dir(notes_dir)
     files = sorted(exdir.glob(f"chapter-*.{style}.md"))
     if not files:
-        typer.echo(f"no chapter-*.{style}.md in {exdir} — run `tn export` first.", err=True)
+        typer.echo(f"no chapter-*.{style}.md in {exdir} — run `tnotes export` first.", err=True)
         raise typer.Exit(1)
 
     chapters: list[tuple[int, str, str]] = []
@@ -654,14 +655,19 @@ def book(
 
     if no_citations:
         chapters = [(num, title, exp.strip_citations(md)) for num, title, md in chapters]
-    stem = "book.reading" if no_citations else "book"
+    # The book lives beside the source PDF, named after it: data/Foo.pdf →
+    # data/Foo.tnotes.md/.pdf (the reading copy adds a .reading marker).
+    suffix = ".tnotes.reading" if no_citations else ".tnotes"
+    stem = input.stem + suffix
     book_md = bookmod.combine(chapters, doc_title=input.stem)
-    (exdir / f"{stem}.md").write_text(book_md, encoding="utf-8")
-    pdfmod.markdown_to_pdf(book_md, exdir / f"{stem}.pdf")
+    md_path = input.parent / f"{stem}.md"
+    pdf_path = input.parent / f"{stem}.pdf"
+    md_path.write_text(book_md, encoding="utf-8")
+    pdfmod.markdown_to_pdf(book_md, pdf_path)
     typer.echo(f"combined {len(chapters)} chapters"
                + (" (no citations — reading copy)" if no_citations else "")
                + (f" (skipped {skipped} reference sections; --all to include)" if skipped else "")
-               + f" → {exdir}/{stem}.md and {stem}.pdf")
+               + f" → {md_path} and {pdf_path.name}")
 
 
 @app.command()
@@ -669,7 +675,7 @@ def export(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     chapters: str = typer.Option(None, "--chapters", "-c", help="Chapter file numbers, e.g. '6' or '6,9-11'. Default: all."),
     style: str = typer.Option("outline", "--style", "-s", help="Study-note style (currently: outline)."),
@@ -699,7 +705,7 @@ def export(
     notes, citing note ids that link to the verbatim evidence (page citations are
     plain text). Writes 4-export/chapter-NNN.<style>.md, and with --pdf an
     interactive PDF beside it. Prose chapters only by default (--all for reference
-    sections). Skips chapters already done unless --force. Run `tn assemble` first.
+    sections). Skips chapters already done unless --force. Run `tnotes assemble` first.
     """
     from . import compose, export as exp
 
@@ -707,13 +713,13 @@ def export(
     effort = config.resolve_effort(effort)
     notes_dir = workspace.work_dir(input, notes_dir)
     if config.auth_source() == "none":
-        typer.echo("export needs Claude; run `tn auth set-key` first.", err=True)
+        typer.echo("export needs Claude; run `tnotes auth set-key` first.", err=True)
         raise typer.Exit(1)
 
     src_dir = workspace.compose_stage_dir(notes_dir, "chapters")
     files = sorted(src_dir.glob("chapter-*.notes.yaml"))
     if not files:
-        typer.echo(f"no composed chapters in {src_dir} — run `tn assemble` first.", err=True)
+        typer.echo(f"no composed chapters in {src_dir} — run `tnotes assemble` first.", err=True)
         raise typer.Exit(1)
     wanted = set(_parse_pages(chapters, len(files))) if chapters else None
     out_dir = workspace.export_dir(notes_dir)
@@ -775,7 +781,7 @@ def assemble(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
 ):
     """Wave 2 stage 6: assemble per-page notes into chapter-scope deliverables.
@@ -793,7 +799,7 @@ def assemble(
     notes_dir = workspace.work_dir(input, notes_dir)
     summaries = compose.assemble_document(input, notes_dir, document=input.stem)
     if not summaries:
-        typer.echo("nothing to assemble — run `tn extract` first.", err=True)
+        typer.echo("nothing to assemble — run `tnotes extract` first.", err=True)
         raise typer.Exit(1)
 
     typer.echo(f"assembled {len(summaries)} chapter notes-sets → {workspace.compose_stage_dir(notes_dir, 'chapters')}/\n")
@@ -820,7 +826,7 @@ def relations(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     build: bool = typer.Option(False, "--build", help="Discover cross-page relations via the model (uses the API)."),
     model: str = typer.Option(
@@ -855,13 +861,13 @@ def relations(
     if not build:
         cached = report.read_fresh(txt_path, fp)
         if cached is None:
-            typer.echo("no fresh cross-page relations — run `tn relations --build` (uses the API).", err=True)
+            typer.echo("no fresh cross-page relations — run `tnotes relations --build` (uses the API).", err=True)
             raise typer.Exit(1)
         typer.echo(cached)
         return
 
     if config.auth_source() == "none":
-        typer.echo("--build needs Claude; run `tn auth set-key` first.", err=True)
+        typer.echo("--build needs Claude; run `tnotes auth set-key` first.", err=True)
         raise typer.Exit(1)
 
     def render() -> str:
@@ -889,7 +895,7 @@ def relations(
             out.append(f"  … and {len(rels) - 60} more (see relations.yaml)")
         return "\n".join(out)
 
-    report.emit(txt_path, fp, force, render, label="tn relations")
+    report.emit(txt_path, fp, force, render, label="tnotes relations")
 
 
 @app.command()
@@ -897,7 +903,7 @@ def terms(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     build: bool = typer.Option(False, "--build", help="Build/refresh the term store via the model (uses the API)."),
     model: str = typer.Option(
@@ -931,13 +937,13 @@ def terms(
     if not build:
         cached = report.read_fresh(txt_path, fp)
         if cached is None:
-            typer.echo("no fresh term store — run `tn terms --build` (uses the API).", err=True)
+            typer.echo("no fresh term store — run `tnotes terms --build` (uses the API).", err=True)
             raise typer.Exit(1)
         typer.echo(cached)
         return
 
     if config.auth_source() == "none":
-        typer.echo("--build needs Claude; run `tn auth set-key` first.", err=True)
+        typer.echo("--build needs Claude; run `tnotes auth set-key` first.", err=True)
         raise typer.Exit(1)
 
     def render() -> str:
@@ -962,7 +968,7 @@ def terms(
             out.append(f"{t['count']:>5}  {t['label']}  ({t['id']})")
         return "\n".join(out)
 
-    report.emit(txt_path, fp, force, render, label="tn terms")
+    report.emit(txt_path, fp, force, render, label="tnotes terms")
 
 
 @app.command()
@@ -970,7 +976,7 @@ def dedup(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     adjudicate: bool = typer.Option(
         False, "--adjudicate",
@@ -1002,7 +1008,7 @@ def dedup(
     effort = config.resolve_effort(effort)
     notes_dir = workspace.work_dir(input, notes_dir)
     if adjudicate and config.auth_source() == "none":
-        typer.echo("--adjudicate needs Claude; run `tn auth set-key` first.", err=True)
+        typer.echo("--adjudicate needs Claude; run `tnotes auth set-key` first.", err=True)
         raise typer.Exit(1)
 
     def render() -> str:
@@ -1056,7 +1062,7 @@ def dedup(
 
     params = f"adjudicate={adjudicate};model={model};effort={effort}"
     fp = report.inputs_fingerprint(input, notes_dir, params=params)
-    report.emit(workspace.compose_stage_dir(notes_dir, "dedup") / "dedup.txt", fp, force, render, label="tn dedup")
+    report.emit(workspace.compose_stage_dir(notes_dir, "dedup") / "dedup.txt", fp, force, render, label="tnotes dedup")
 
 
 @app.command()
@@ -1064,7 +1070,7 @@ def chapters(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
     notes_dir: Path = typer.Option(
         None, "--notes", "-n", file_okay=False,
-        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
+        help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.tnotes/).",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Regenerate even if the saved view is still fresh."),
 ):
@@ -1103,7 +1109,7 @@ def chapters(
         return "\n".join(out)
 
     fp = report.inputs_fingerprint(input, notes_dir)
-    report.emit(workspace.compose_stage_dir(notes_dir, "chapter-map") / "chapters.txt", fp, force, render, label="tn chapters")
+    report.emit(workspace.compose_stage_dir(notes_dir, "chapter-map") / "chapters.txt", fp, force, render, label="tnotes chapters")
 
 
 if __name__ == "__main__":
