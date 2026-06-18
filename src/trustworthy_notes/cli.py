@@ -9,13 +9,89 @@ import subprocess
 from pathlib import Path
 
 import typer
+from typer.core import TyperGroup
 
 from . import config, ingest, workspace
 
+
+class _DefaultGroup(TyperGroup):
+    """Route a bare PDF path (no subcommand) to the one-command orchestrator.
+
+    Typer/Click resolve the first token as a subcommand; an optional positional on
+    the group callback would instead *swallow* the subcommand name. So we keep the
+    orchestrator as a hidden ``run`` command and, when the first token isn't a known
+    subcommand (i.e. it's a file path), transparently prepend ``run`` — leaving every
+    real subcommand to dispatch exactly as before. (No args at all falls through to
+    Typer's ``no_args_is_help``.)
+    """
+
+    def resolve_command(self, ctx, args):
+        try:
+            return super().resolve_command(ctx, args)
+        except typer.Exit:
+            raise
+        except Exception:
+            return super().resolve_command(ctx, ["run", *args])
+
+
 app = typer.Typer(
     add_completion=False,
-    help="tnotes — trustworthy, evidence-anchored notes from PDF documents.",
+    cls=_DefaultGroup,
+    no_args_is_help=True,
+    help="tnotes — trustworthy, evidence-anchored notes from PDF documents.\n\n"
+    "Run `tnotes <pdf>` to take a PDF through the whole pipeline (extract → compose → "
+    "export → book) and write the finished book beside it as <stem>.tnotes.pdf. "
+    "Already-finished stages are skipped (--force to redo). Use the subcommands below "
+    "for per-stage control. Connect to Claude once with `tnotes auth set-key`.",
 )
+
+
+@app.command(name="run", hidden=True)
+def run(
+    pdf: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
+    pages: str = typer.Option(
+        None, "--pages", "-p",
+        help="Restrict the book to a page range: '1-30', '14', or '14,16'. "
+        "Tags the output (e.g. -p 1-30 → <stem>.p1-30.tnotes.pdf).",
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Regenerate every stage, even ones already finished."
+    ),
+    cite: bool = typer.Option(
+        False, "--cite",
+        help="Produce the anchored version ([s-N] markers + Notes & Sources appendix) "
+        "instead of the default clean prose reading copy.",
+    ),
+):
+    """One-command book generation: run the whole pipeline on a bare PDF.
+
+    Reached as `tnotes <pdf>` (the `run` name is internal). Drives every stage —
+    extract → terms → dedup → relations → assemble → export → book — skipping any
+    already finished, and writes the finished book beside the source as
+    <stem>[.pRANGE].tnotes.pdf (clean prose by default; --cite for the anchored copy).
+    """
+    from . import pipeline
+
+    if config.auth_source() == "none":
+        typer.echo(
+            "tnotes isn't connected to Claude yet. Run `tnotes auth set-key` (API key) "
+            "or `tnotes auth login` (your account) first.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    def log(msg: str) -> None:
+        typer.echo(msg, err=True)
+
+    try:
+        book_pdf = pipeline.run(
+            pdf, pages=pages, force=force, cite=cite, log=log, parse_pages=_parse_pages
+        )
+    except ValueError as exc:
+        typer.echo(f"tnotes: {exc}", err=True)
+        raise typer.Exit(1)
+    typer.echo(str(book_pdf))
+
 
 auth_app = typer.Typer(help="Connect tnotes to Claude (so you don't touch API keys or env vars).")
 app.add_typer(auth_app, name="auth")
