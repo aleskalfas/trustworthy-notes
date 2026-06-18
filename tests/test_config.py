@@ -36,3 +36,50 @@ def test_auth_source_precedence(cfg, monkeypatch):
 
     cfg.set_api_key("sk-saved")
     assert cfg.auth_source() == "config"  # saved key wins over env
+
+
+def test_set_get_model_round_trip(cfg):
+    assert cfg.get_model() is None  # unset
+    cfg.set_model("claude-opus-4-8")
+    assert cfg.get_model() == "claude-opus-4-8"
+
+
+def test_set_get_effort_round_trip(cfg):
+    assert cfg.get_effort() is None  # unset
+    cfg.set_effort("medium")
+    assert cfg.get_effort() == "medium"
+
+
+def test_effort_empty_string_is_a_real_value_not_unset(cfg):
+    # '' means "this model has no effort knob" — distinct from unset (None).
+    cfg.set_effort("")
+    assert cfg.get_effort() == ""
+
+
+def test_model_and_effort_do_not_clobber_api_key(cfg):
+    cfg.set_api_key("sk-keep")
+    cfg.set_model("claude-opus-4-8")
+    cfg.set_effort("high")
+    assert cfg.get_api_key() == "sk-keep"
+    assert cfg.get_model() == "claude-opus-4-8"
+    assert cfg.get_effort() == "high"
+
+
+def test_resolution_built_in_when_nothing_set(cfg):
+    # Mirrors the flag > config > built-in resolution in `tn extract`, with no
+    # flag and nothing configured: the built-in Sonnet/low defaults apply.
+    model = None or cfg.get_model() or cfg.DEFAULT_MODEL
+    cfg_effort = cfg.get_effort()
+    effort = cfg_effort if cfg_effort is not None else cfg.DEFAULT_EFFORT
+    assert model == "claude-sonnet-4-6"
+    assert effort == "low"
+
+
+def test_resolution_config_wins_over_built_in(cfg):
+    cfg.set_model("claude-opus-4-8")
+    cfg.set_effort("")
+    model = None or cfg.get_model() or cfg.DEFAULT_MODEL
+    cfg_effort = cfg.get_effort()
+    effort = cfg_effort if cfg_effort is not None else cfg.DEFAULT_EFFORT
+    assert model == "claude-opus-4-8"
+    assert effort == ""  # configured empty wins, not collapsed to the built-in
