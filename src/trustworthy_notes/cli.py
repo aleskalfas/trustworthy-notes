@@ -86,6 +86,45 @@ def auth_clear_key():
     typer.echo("Cleared the saved key.")
 
 
+config_app = typer.Typer(help="Set tn's defaults (extraction model and effort), stored in your home.")
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("set-model")
+def config_set_model(model: str = typer.Argument(..., help="Claude model id, e.g. claude-sonnet-4-6.")):
+    """Save the default extraction model (used when no --model flag is given)."""
+    config.set_model(model)
+    typer.echo(f"Saved default model: {model} ({config.config_file()}).")
+
+
+@config_app.command("set-effort")
+def config_set_effort(
+    effort: str = typer.Argument(
+        ..., help="Effort: low | medium | high, or '' for models without an effort knob."
+    )
+):
+    """Save the default effort (used when no --effort flag is given)."""
+    config.set_effort(effort)
+    shown = effort or "'' (none)"
+    typer.echo(f"Saved default effort: {shown} ({config.config_file()}).")
+
+
+@config_app.command("show")
+def config_show():
+    """Show the resolved default model and effort, and where each comes from."""
+    saved_model = config.get_model()
+    saved_effort = config.get_effort()
+    model = saved_model or config.DEFAULT_MODEL
+    effort = saved_effort if saved_effort is not None else config.DEFAULT_EFFORT
+    model_src = "config" if saved_model else f"built-in ({config.DEFAULT_MODEL})"
+    effort_src = "config" if saved_effort is not None else f"built-in ({config.DEFAULT_EFFORT})"
+    effort_shown = effort or "'' (none)"
+    typer.echo(f"config file : {config.config_file()}")
+    typer.echo(f"model : {model}  (from {model_src})")
+    typer.echo(f"effort: {effort_shown}  (from {effort_src})")
+    typer.echo("A --model/--effort flag on `tn extract` overrides these.")
+
+
 def _parse_pages(spec: str, max_page: int) -> list[int]:
     """Parse a 1-based page spec like '15', '14-18', or '14,16,20'.
 
@@ -126,20 +165,25 @@ def _render_page(p) -> str:
 @app.command()
 def extract(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
-    pages: str = typer.Option(..., "--pages", "-p", help="Page(s): '14', '14-17', or '14,16'."),
+    pages: str = typer.Option(
+        None, "--pages", "-p",
+        help="Page(s): '14', '14-17', or '14,16'. Optional — default: all text pages of the document.",
+    ),
     out: Path = typer.Option(
         None, "--out", "-o", file_okay=False,
         help="Output dir. Default: a folder beside the PDF (data/Foo.pdf → data/Foo.pdf.notes/).",
     ),
     window: int = typer.Option(1, "--window", "-w", help="Neighbour text pages of context each side."),
     model: str = typer.Option(
-        "claude-opus-4-8", "--model", "-m",
-        help="Claude model. Cheaper: claude-sonnet-4-6, or claude-haiku-4-5 (use --effort '').",
+        None, "--model", "-m",
+        help="Claude model. Resolves: this flag > `model:` in config > built-in "
+        f"({config.DEFAULT_MODEL}). Cheaper still: claude-haiku-4-5 (use --effort '').",
     ),
     effort: str = typer.Option(
-        "low", "--effort", "-e",
+        None, "--effort", "-e",
         help="Effort: low | medium | high. Use '' for models without effort. "
-        "low is the default — medium/high let adaptive thinking run very long on this bounded task.",
+        "Resolves: this flag > `effort:` in config > built-in (low). "
+        "medium/high let adaptive thinking run very long on this bounded task.",
     ),
     gaps: bool = typer.Option(
         False, "--gaps", help="After each page, run the §7.6 gap report: source sentences no evidence covers."
@@ -164,6 +208,12 @@ def extract(
     from .extract import run_extract, write_notes
     from .extract_anthropic import AnthropicExtractor
 
+    # Resolve in layers: explicit flag > user config > built-in default. The flag
+    # default is None, so "not passed" is distinguishable from "passed as ''"
+    # (a meaningful effort value for models without an effort knob).
+    model = config.resolve_model(model)
+    effort = config.resolve_effort(effort)
+
     if config.auth_source() == "none":
         typer.echo(
             "tn isn't connected to Claude yet. Run `tn auth set-key` (API key) "
@@ -174,10 +224,20 @@ def extract(
 
     all_pages = ingest.read_pages(input)
     by_number = {p.page_number: p for p in all_pages}
-    selected = _parse_pages(pages, len(all_pages))
-    if not selected:
-        typer.echo(f"no pages in range 1..{len(all_pages)} matched {pages!r}", err=True)
-        raise typer.Exit(1)
+    if pages is None:
+        # No range given: default to every text page. read_pages already ran the
+        # same layout classification the `layout` command uses (classify_page),
+        # so non-text pages (figure/table/blank) never reach the extractor.
+        selected = [p.page_number for p in all_pages if p.page_type == "text"]
+        if not selected:
+            typer.echo(f"no text pages found in {input.name}", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"no --pages given: extracting all {len(selected)} text page(s)", err=True)
+    else:
+        selected = _parse_pages(pages, len(all_pages))
+        if not selected:
+            typer.echo(f"no pages in range 1..{len(all_pages)} matched {pages!r}", err=True)
+            raise typer.Exit(1)
     out = workspace.work_dir(input, out)
     workspace.extract_dir(out).mkdir(parents=True, exist_ok=True)
     typer.echo(f"writing notes to {workspace.extract_dir(out)}/", err=True)
@@ -613,8 +673,16 @@ def export(
     ),
     chapters: str = typer.Option(None, "--chapters", "-c", help="Chapter file numbers, e.g. '6' or '6,9-11'. Default: all."),
     style: str = typer.Option("outline", "--style", "-s", help="Study-note style (currently: outline)."),
-    model: str = typer.Option("claude-opus-4-8", "--model", "-m", help="Model for synthesis."),
-    effort: str = typer.Option("low", "--effort", "-e", help="Effort for synthesis."),
+    model: str = typer.Option(
+        None, "--model", "-m",
+        help="Model for synthesis. Resolves: this flag > `model:` in config > built-in "
+        f"({config.DEFAULT_MODEL}).",
+    ),
+    effort: str = typer.Option(
+        None, "--effort", "-e",
+        help="Effort for synthesis. Resolves: this flag > `effort:` in config > built-in "
+        f"({config.DEFAULT_EFFORT}). Use '' for models without an effort knob.",
+    ),
     pdf: bool = typer.Option(
         False, "--pdf",
         help="Also render an interactive PDF (bookmarks + clickable Contents + [s-N] links) beside the .md.",
@@ -635,6 +703,8 @@ def export(
     """
     from . import compose, export as exp
 
+    model = config.resolve_model(model)
+    effort = config.resolve_effort(effort)
     notes_dir = workspace.work_dir(input, notes_dir)
     if config.auth_source() == "none":
         typer.echo("export needs Claude; run `tn auth set-key` first.", err=True)
@@ -753,8 +823,16 @@ def relations(
         help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
     ),
     build: bool = typer.Option(False, "--build", help="Discover cross-page relations via the model (uses the API)."),
-    model: str = typer.Option("claude-opus-4-8", "--model", "-m", help="Model for --build."),
-    effort: str = typer.Option("low", "--effort", "-e", help="Effort for --build."),
+    model: str = typer.Option(
+        None, "--model", "-m",
+        help="Model for --build. Resolves: this flag > `model:` in config > built-in "
+        f"({config.DEFAULT_MODEL}).",
+    ),
+    effort: str = typer.Option(
+        None, "--effort", "-e",
+        help="Effort for --build. Resolves: this flag > `effort:` in config > built-in "
+        f"({config.DEFAULT_EFFORT}). Use '' for models without an effort knob.",
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the saved view is still fresh."),
 ):
     """Wave 2 stage 5: cross-page relations (term-blocked).
@@ -767,6 +845,8 @@ def relations(
     """
     from . import relate, report
 
+    model = config.resolve_model(model)
+    effort = config.resolve_effort(effort)
     notes_dir = workspace.work_dir(input, notes_dir)
     params = f"model={model};effort={effort}"
     fp = report.inputs_fingerprint(input, notes_dir, params=params)
@@ -820,8 +900,16 @@ def terms(
         help="Notes dir. Default: the PDF's folder (data/Foo.pdf → data/Foo.pdf.notes/).",
     ),
     build: bool = typer.Option(False, "--build", help="Build/refresh the term store via the model (uses the API)."),
-    model: str = typer.Option("claude-opus-4-8", "--model", "-m", help="Model for --build."),
-    effort: str = typer.Option("low", "--effort", "-e", help="Effort for --build."),
+    model: str = typer.Option(
+        None, "--model", "-m",
+        help="Model for --build. Resolves: this flag > `model:` in config > built-in "
+        f"({config.DEFAULT_MODEL}).",
+    ),
+    effort: str = typer.Option(
+        None, "--effort", "-e",
+        help="Effort for --build. Resolves: this flag > `effort:` in config > built-in "
+        f"({config.DEFAULT_EFFORT}). Use '' for models without an effort knob.",
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the saved store is still fresh."),
 ):
     """Wave 2 stage 4: the document-global term store (vocabulary + statement links).
@@ -833,6 +921,8 @@ def terms(
     """
     from . import report, term_store
 
+    model = config.resolve_model(model)
+    effort = config.resolve_effort(effort)
     notes_dir = workspace.work_dir(input, notes_dir)
     params = f"model={model};effort={effort}"
     fp = report.inputs_fingerprint(input, notes_dir, params=params)
@@ -886,8 +976,16 @@ def dedup(
         False, "--adjudicate",
         help="Part (b): ask the model to confirm which candidates truly merge (uses the API).",
     ),
-    model: str = typer.Option("claude-opus-4-8", "--model", "-m", help="Model for --adjudicate."),
-    effort: str = typer.Option("low", "--effort", "-e", help="Effort for --adjudicate."),
+    model: str = typer.Option(
+        None, "--model", "-m",
+        help="Model for --adjudicate. Resolves: this flag > `model:` in config > built-in "
+        f"({config.DEFAULT_MODEL}).",
+    ),
+    effort: str = typer.Option(
+        None, "--effort", "-e",
+        help="Effort for --adjudicate. Resolves: this flag > `effort:` in config > built-in "
+        f"({config.DEFAULT_EFFORT}). Use '' for models without an effort knob.",
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Regenerate even if the saved view is still fresh."),
 ):
     """Wave 2 stage 3 (dedup): candidate duplicate statements.
@@ -900,6 +998,8 @@ def dedup(
     """
     from . import compose, report
 
+    model = config.resolve_model(model)
+    effort = config.resolve_effort(effort)
     notes_dir = workspace.work_dir(input, notes_dir)
     if adjudicate and config.auth_source() == "none":
         typer.echo("--adjudicate needs Claude; run `tn auth set-key` first.", err=True)

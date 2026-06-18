@@ -52,9 +52,38 @@ progress. Useful commands now:
 tn layout INPUT.pdf                 # classify every page: text / figure / table / blank
 tn probe INPUT.pdf --pages 14-16    # dump the extracted text of chosen pages
 tn render INPUT.pdf --pages 15 -o scans   # annotated scan PNGs (header/columns/footnotes)
-tn extract INPUT.pdf --pages 14-17  # extract notes (needs auth) — see output convention below
+tn extract INPUT.pdf                # extract notes from ALL text pages (needs auth)
+tn extract INPUT.pdf --pages 14-17  # …or just a range — see output convention below
 tn gap INPUT.pdf --pages 14         # §7.6 coverage report on already-extracted notes
 ```
+
+`--pages` is optional: omit it and `tn extract` does every text page of the
+document (figure / table / blank pages are skipped automatically, using the same
+classification as `tn layout`). Pass a range to override that default.
+
+### Choosing the model and effort
+
+Every command that calls Claude (`extract`, `export`, `terms --build`,
+`relations --build`, `dedup --adjudicate`) resolves which model and effort to use
+in layers, most specific first:
+
+1. an explicit `--model` / `--effort` flag on the command,
+2. else a default you saved with `tn config` (below),
+3. else the built-in defaults: model `claude-sonnet-4-6`, effort `low`.
+
+So with nothing configured and no flag you get Sonnet at low effort — a
+cost-appropriate default. The premium model stays one flag (or one config) away:
+
+```
+tn config set-model claude-opus-4-8   # use the premium model by default
+tn config set-effort medium           # raise the default effort
+tn config set-effort ''               # for models without an effort knob (e.g. haiku)
+tn config show                        # show the resolved model/effort and where each comes from
+tn extract INPUT.pdf --pages 14 -m claude-haiku-4-5 -e ''   # a flag overrides config for one run
+```
+
+These defaults are stored in the same `~/.trustworthy-notes/config.yaml` as your
+API key (see Platform below); setting them never touches the saved key.
 
 ### Where generated files go
 
