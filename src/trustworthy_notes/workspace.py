@@ -1,17 +1,17 @@
 """Where a document's generated artifacts live.
 
 Convention: every output for a source document goes in a sibling folder named
-after the full source filename plus a ``.notes`` marker — ``data/Foo.pdf`` →
-``data/Foo.pdf.notes/``. The marker is what makes this legal: a directory cannot
+after the full source filename plus a ``.tnotes`` marker — ``data/Foo.pdf`` →
+``data/Foo.pdf.tnotes/``. The marker is what makes this legal: a directory cannot
 share a name with the source file, so we keep the full filename (incl. its
-extension, so it sorts beside the source) and append ``.notes``. One folder per
+extension, so it sorts beside the source) and append ``.tnotes``. One folder per
 document keeps all generated artifacts beside their source and never mixes two
 documents. Any command's ``--out`` overrides the location.
 
 Inside the work dir, outputs are grouped into **numbered wave folders** that mirror
 the pipeline (ARCHITECTURE §1), so a listing reads in pipeline order::
 
-    Foo.pdf.notes/
+    Foo.pdf.tnotes/
       1-extract/    page-NNNN.notes.yaml            (Wave 1: per-page atoms)
       2-compose/    chapters.txt, stitches.txt, …   (Wave 2: chapter assembly)
       3-validate/   gaps.txt                        (Wave 3: coverage/validation)
@@ -29,11 +29,11 @@ WAVE_EXPORT = "4-export"
 
 def work_dir(input_path: str | Path, override: str | Path | None = None) -> Path:
     """The output folder for ``input_path`` — ``override`` if given, else the
-    sibling ``<filename>.notes`` folder (``data/Foo.pdf`` → ``data/Foo.pdf.notes``)."""
+    sibling ``<filename>.tnotes`` folder (``data/Foo.pdf`` → ``data/Foo.pdf.tnotes``)."""
     if override is not None:
         return Path(override)
     p = Path(input_path)
-    return p.parent / (p.name + ".notes")
+    return p.parent / (p.name + ".tnotes")
 
 
 def extract_dir(work_dir: str | Path) -> Path:
