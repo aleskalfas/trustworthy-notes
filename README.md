@@ -63,8 +63,9 @@ classification as `tn layout`). Pass a range to override that default.
 
 ### Choosing the model and effort
 
-`tn extract` resolves which Claude model and effort to use in layers, most
-specific first:
+Every command that calls Claude (`extract`, `export`, `terms --build`,
+`relations --build`, `dedup --adjudicate`) resolves which model and effort to use
+in layers, most specific first:
 
 1. an explicit `--model` / `--effort` flag on the command,
 2. else a default you saved with `tn config` (below),

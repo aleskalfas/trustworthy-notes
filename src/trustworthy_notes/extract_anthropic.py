@@ -15,7 +15,7 @@ Design:
 - Whatever the model returns, ``run_extract``'s anchor gate drops any excerpt
   that isn't verbatim on the page — so hallucinated quotes can't survive.
 
-Defaults: ``claude-opus-4-8``, adaptive thinking, ``effort: medium``.
+Defaults: ``config.DEFAULT_MODEL`` (Sonnet), adaptive thinking, ``effort: low``.
 """
 
 from __future__ import annotations
@@ -26,9 +26,13 @@ from typing import Optional
 
 import anthropic
 
+from .config import DEFAULT_MODEL
 from .models import PageText
 
-MODEL = "claude-opus-4-8"
+# Safety floor: if a caller ever omits an explicit model, fall back to the
+# cost-appropriate default rather than an expensive one. Every CLI path resolves
+# the model via config.resolve_model before reaching the extractor.
+MODEL = DEFAULT_MODEL
 
 
 class ExtractionError(RuntimeError):

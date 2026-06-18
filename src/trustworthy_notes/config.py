@@ -108,6 +108,26 @@ def set_effort(effort: str) -> None:
     save(cfg)
 
 
+def resolve_model(flag: Optional[str]) -> str:
+    """Resolve the model to use: an explicit flag wins, then user config, then the
+    built-in default. The single source of model resolution for every command."""
+    return flag or get_model() or DEFAULT_MODEL
+
+
+def resolve_effort(flag: Optional[str]) -> str:
+    """Resolve the effort to use: an explicit flag wins, then user config, then the
+    built-in default. The single source of effort resolution for every command.
+
+    A configured empty string (``effort: ''`` — models without an effort knob) is a
+    meaningful value and is preserved; only ``None`` (flag not passed, key absent)
+    reads as unset. ``flag is None`` distinguishes "not passed" from "passed as ''".
+    """
+    if flag is not None:
+        return flag
+    cfg_effort = get_effort()
+    return cfg_effort if cfg_effort is not None else DEFAULT_EFFORT
+
+
 def auth_source() -> str:
     """Where tn will get Claude credentials: 'config' | 'env' | 'login' | 'none'."""
     if get_api_key():
