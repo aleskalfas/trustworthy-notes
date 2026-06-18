@@ -45,6 +45,16 @@ _FOOTNOTE_SIZE_RATIO = 0.85
 _LINE_TOL = 3.0
 # Page-label search region (bottom fraction of the page).
 _LABEL_REGION_TOP = 0.92
+# Inter-character gap (as a fraction of the char's font size) above which we
+# read a word break. Some text layers set inter-word gaps below pdfplumber's
+# default `x_tolerance`, so `extract_words` merges adjacent words into one token
+# ("andLLMs"); we re-split on the raw char gaps, which are sharply bimodal —
+# intra-word gaps sit near zero, word gaps near ~0.22*size — so any threshold in
+# the empty valley between them recovers the spaces without splitting words.
+_WORD_GAP_RATIO = 0.18
+# Absolute floor (pts) for the word-break gap, so very small fonts (footnotes)
+# don't get a threshold so tight that kerning is mistaken for a space.
+_WORD_GAP_FLOOR = 1.2
 
 _ROMAN = set("ivxlcdm")
 
@@ -190,6 +200,84 @@ def _footnote_marker(text: str, size: float, median_size: float):
     return f"{pre}[^{num}]{post}"
 
 
+def _word_break_gap(size: float) -> float:
+    """Horizontal gap (pts) at or above which a space separates two words.
+
+    Font-relative with an absolute floor, so it tracks the text size instead of a
+    fixed tolerance. Used in lockstep by the char-level splitter (which recovers
+    spaces `extract_words` merged away) and the word reassembly (which decides
+    whether to emit a space between tokens), so the two never disagree on a gap.
+    """
+    return max(_WORD_GAP_FLOOR, _WORD_GAP_RATIO * (size or 10.0))
+
+
+def _split_word_on_char_gaps(word, chars) -> list[dict]:
+    """Split one merged word into sub-words on sub-tolerance inter-char gaps.
+
+    pdfplumber's `extract_words` joins characters whose horizontal gap is below a
+    fixed `x_tolerance` (default 3pt). A text layer that sets inter-word spacing
+    *below* that tolerance therefore arrives as one run-together token
+    ("andLLMs.Withabrain..."). We recover the breaks from the raw `chars`: walk
+    them left to right and start a new sub-word wherever the gap to the previous
+    char exceeds a font-relative threshold (`max(floor, ratio*size)`), which lands
+    in the empty valley between near-zero intra-word gaps and the wider word gaps.
+
+    Each sub-word inherits the parent word's metadata (``fontname``, ``size``,
+    vertical extent) so downstream font-aware handling — transliteration and the
+    footnote-marker test — is unchanged; only ``text``/``x0``/``x1`` are recomputed.
+    A word with no recoverable chars (or a single char) is returned unchanged, so
+    this degrades to the prior behaviour when char data is missing.
+    """
+    wc = sorted(
+        (
+            c
+            for c in chars
+            if word["x0"] - 0.5 <= c["x0"]
+            and c["x1"] <= word["x1"] + 0.5
+            and abs(c["top"] - word["top"]) <= _LINE_TOL
+        ),
+        key=lambda c: c["x0"],
+    )
+    if len(wc) < 2:
+        return [word]
+
+    groups: list[list[dict]] = [[wc[0]]]
+    for prev, cur in zip(wc, wc[1:]):
+        size = cur.get("size") or prev.get("size") or word.get("size") or 10.0
+        if cur["x0"] - prev["x1"] >= _word_break_gap(size):
+            groups.append([cur])
+        else:
+            groups[-1].append(cur)
+    if len(groups) == 1:
+        return [word]
+
+    out: list[dict] = []
+    for g in groups:
+        sub = dict(word)
+        sub["text"] = "".join(c["text"] for c in g)
+        sub["x0"] = g[0]["x0"]
+        sub["x1"] = g[-1]["x1"]
+        out.append(sub)
+    return out
+
+
+def _extract_spaced_words(region) -> list[dict]:
+    """`extract_words`, but with sub-tolerance-merged words split back apart.
+
+    Keeps `extract_words` (so line grouping, font attrs, and the existing glyph-
+    gap detection are unaffected) and refines each token against the region's
+    raw chars to restore inter-word spaces lost to a tight text layer (#22).
+    """
+    words = region.extract_words(extra_attrs=["fontname", "size"])
+    if not words:
+        return words
+    chars = region.chars
+    refined: list[dict] = []
+    for w in words:
+        refined.extend(_split_word_on_char_gaps(w, chars))
+    return refined
+
+
 def _region_text(region) -> tuple[str, list[dict]]:
     """Text of a cropped region (reassembled from words), plus inline drawn glyphs.
 
@@ -203,7 +291,7 @@ def _region_text(region) -> tuple[str, list[dict]]:
     copyable placeholder `⟨glyph-HASH⟩`, so it is neither silently dropped nor
     un-copyable; its region is recorded for the future OCR/crop pass.
     """
-    words = region.extract_words(extra_attrs=["fontname", "size"])
+    words = _extract_spaced_words(region)
     if not words:
         return "", []
     for w in words:
@@ -244,7 +332,7 @@ def _region_text(region) -> tuple[str, list[dict]]:
                             ),
                         }
                     )
-                elif gap > max(1.0, 0.2 * size):
+                elif gap >= _word_break_gap(size):
                     parts.append(" ")
             marker = _footnote_marker(w["text"], w.get("size") or 0.0, median_size)
             parts.append(marker if marker else w["text"])
