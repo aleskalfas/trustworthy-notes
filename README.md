@@ -56,6 +56,29 @@ tn extract INPUT.pdf --pages 14-17  # extract notes (needs auth) — see output 
 tn gap INPUT.pdf --pages 14         # §7.6 coverage report on already-extracted notes
 ```
 
+### Choosing the model and effort
+
+`tn extract` resolves which Claude model and effort to use in layers, most
+specific first:
+
+1. an explicit `--model` / `--effort` flag on the command,
+2. else a default you saved with `tn config` (below),
+3. else the built-in defaults: model `claude-sonnet-4-6`, effort `low`.
+
+So with nothing configured and no flag you get Sonnet at low effort — a
+cost-appropriate default. The premium model stays one flag (or one config) away:
+
+```
+tn config set-model claude-opus-4-8   # use the premium model by default
+tn config set-effort medium           # raise the default effort
+tn config set-effort ''               # for models without an effort knob (e.g. haiku)
+tn config show                        # show the resolved model/effort and where each comes from
+tn extract INPUT.pdf --pages 14 -m claude-haiku-4-5 -e ''   # a flag overrides config for one run
+```
+
+These defaults are stored in the same `~/.trustworthy-notes/config.yaml` as your
+API key (see Platform below); setting them never touches the saved key.
+
 ### Where generated files go
 
 By default every artifact for a document lands in a **folder beside the PDF,
