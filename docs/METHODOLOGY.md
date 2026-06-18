@@ -284,7 +284,7 @@ A notes-set either passes or fails these checks. The first five are mechanical
 5. **Schema-valid** — the stored artifact matches the schema (§8).
 6. **Complete (coverage)** — no *important* information was dropped. This cannot
    be proven mechanically. The software instead produces a **gap report**
-   (`trustworthy_notes.gap`, surfaced by `tn gap` and `tn extract --gaps`): it splits a
+   (`trustworthy_notes.gap`, surfaced by `tnotes gap` and `tnotes extract --gaps`): it splits a
    page's body and footnotes into sentences and flags those no evidence record
    covers, for a human to confirm are genuinely unimportant (page furniture,
    repetition) rather than lost content. It is advisory, never a gate — coverage

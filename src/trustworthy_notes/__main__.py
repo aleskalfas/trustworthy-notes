@@ -1,6 +1,6 @@
-"""Run the tn CLI as ``python -m trustworthy_notes`` and as the frozen exe.
+"""Run the tnotes CLI as ``python -m trustworthy_notes`` and as the frozen exe.
 
-The ``tn`` console-script entry (``trustworthy_notes.cli:app``) is what pip/uv
+The ``tnotes`` console-script entry (``trustworthy_notes.cli:app``) is what pip/uv
 installs; a PyInstaller one-file build instead invokes this module as the program
 entry point. Both call the same typer app, so the frozen exe behaves identically.
 """

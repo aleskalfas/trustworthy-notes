@@ -121,7 +121,7 @@ def build_relations(
     Stage-4 term store (``terms.yaml``). Returns deduped ``[{from,to,type}]``."""
     terms_path = workspace.compose_stage_dir(work_dir, "terms") / "terms.yaml"
     if not terms_path.is_file():
-        raise FileNotFoundError("terms.yaml not found — run `tn terms --build` first")
+        raise FileNotFoundError("terms.yaml not found — run `tnotes terms --build` first")
     links = (yaml.safe_load(terms_path.read_text(encoding="utf-8")) or {}).get("links", {})
 
     client = client or anthropic.Anthropic(api_key=api_key)

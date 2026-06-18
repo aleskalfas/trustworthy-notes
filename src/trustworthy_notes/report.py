@@ -23,7 +23,7 @@ import typer
 
 from . import build, ingest, models, translit, workspace
 
-_HEADER = "# tn artifact"
+_HEADER = "# tnotes artifact"
 
 
 def _code_identity() -> bytes:

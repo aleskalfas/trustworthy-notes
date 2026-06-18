@@ -1,5 +1,5 @@
-"""CLI tests for the `tn config` surface and the layered model/effort
-resolution in `tn extract`. Uses TN_CONFIG_DIR so $HOME is untouched, and stubs
+"""CLI tests for the `tnotes config` surface and the layered model/effort
+resolution in `tnotes extract`. Uses TN_CONFIG_DIR so $HOME is untouched, and stubs
 out ingest/extraction so no PDF and no network are needed."""
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def test_config_show_built_in_defaults_when_unset(cli):
 
 
 def _stub_extract_pipeline(cli, monkeypatch):
-    """Stub ingest + extraction so `tn extract` runs without a PDF or network,
+    """Stub ingest + extraction so `tnotes extract` runs without a PDF or network,
     and return a dict that captures the (model, effort) the extractor saw."""
     captured: dict = {}
 
@@ -182,7 +182,7 @@ def test_extract_explicit_pages_overrides_default(cli, tmp_path, monkeypatch):
 
 
 # --- Regression for issue #9: the compose-stage commands must honour the
-# configured model too, not just `tn extract`. Before the fix these hardcoded
+# configured model too, not just `tnotes extract`. Before the fix these hardcoded
 # claude-opus-4-8 and silently ran an expensive stage. ---
 
 
