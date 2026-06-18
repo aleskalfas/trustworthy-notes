@@ -179,3 +179,62 @@ def test_extract_explicit_pages_overrides_default(cli, tmp_path, monkeypatch):
     assert res.exit_code == 0, res.stdout
     # Explicit range wins: only page 3, default text-page derivation not applied.
     assert extracted == [3]
+
+
+# --- Regression for issue #9: the compose-stage commands must honour the
+# configured model too, not just `tn extract`. Before the fix these hardcoded
+# claude-opus-4-8 and silently ran an expensive stage. ---
+
+
+def test_terms_build_uses_configured_model_not_opus(cli, tmp_path, monkeypatch):
+    cli.config.set_model("claude-sonnet-4-6")  # configured; no --model flag
+    captured: dict = {}
+
+    stage_dir = tmp_path / "stage"
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+    monkeypatch.setattr(cli.config, "get_api_key", lambda: "sk-test")
+    monkeypatch.setattr(cli.workspace, "work_dir", lambda _input, _notes: tmp_path)
+    monkeypatch.setattr(cli.workspace, "compose_stage_dir", lambda _wd, _stage: stage_dir)
+
+    import trustworthy_notes.term_store as term_store
+
+    def _build_store(_pdf, _wd, *, model, effort, api_key):
+        captured["model"] = model
+        captured["effort"] = effort
+        return {"terms": [], "links": {}}
+
+    monkeypatch.setattr(term_store, "build_store", _build_store)
+
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_text("x")
+    res = runner.invoke(cli.app, ["terms", str(pdf), "--build"])
+    assert res.exit_code == 0, res.stdout
+    assert captured["model"] == "claude-sonnet-4-6"  # configured value, NOT opus
+    assert captured["model"] != "claude-opus-4-8"
+
+
+def test_relations_build_uses_configured_model_not_opus(cli, tmp_path, monkeypatch):
+    cli.config.set_model("claude-sonnet-4-6")  # configured; no --model flag
+    captured: dict = {}
+
+    stage_dir = tmp_path / "stage"
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+    monkeypatch.setattr(cli.config, "get_api_key", lambda: "sk-test")
+    monkeypatch.setattr(cli.workspace, "work_dir", lambda _input, _notes: tmp_path)
+    monkeypatch.setattr(cli.workspace, "compose_stage_dir", lambda _wd, _stage: stage_dir)
+
+    import trustworthy_notes.relate as relate
+
+    def _build_relations(_pdf, _wd, *, model, effort, api_key):
+        captured["model"] = model
+        captured["effort"] = effort
+        return []
+
+    monkeypatch.setattr(relate, "build_relations", _build_relations)
+
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_text("x")
+    res = runner.invoke(cli.app, ["relations", str(pdf), "--build"])
+    assert res.exit_code == 0, res.stdout
+    assert captured["model"] == "claude-sonnet-4-6"  # configured value, NOT opus
+    assert captured["model"] != "claude-opus-4-8"

@@ -65,21 +65,35 @@ def test_model_and_effort_do_not_clobber_api_key(cfg):
     assert cfg.get_effort() == "high"
 
 
-def test_resolution_built_in_when_nothing_set(cfg):
-    # Mirrors the flag > config > built-in resolution in `tn extract`, with no
-    # flag and nothing configured: the built-in Sonnet/low defaults apply.
-    model = None or cfg.get_model() or cfg.DEFAULT_MODEL
-    cfg_effort = cfg.get_effort()
-    effort = cfg_effort if cfg_effort is not None else cfg.DEFAULT_EFFORT
-    assert model == "claude-sonnet-4-6"
-    assert effort == "low"
+def test_resolve_built_in_when_nothing_set(cfg):
+    # No flag, nothing configured: the built-in Sonnet/low defaults apply.
+    assert cfg.resolve_model(None) == "claude-sonnet-4-6"
+    assert cfg.resolve_effort(None) == "low"
 
 
-def test_resolution_config_wins_over_built_in(cfg):
+def test_resolve_config_wins_over_built_in(cfg):
     cfg.set_model("claude-opus-4-8")
+    cfg.set_effort("high")
+    assert cfg.resolve_model(None) == "claude-opus-4-8"
+    assert cfg.resolve_effort(None) == "high"
+
+
+def test_resolve_flag_wins_over_config(cfg):
+    cfg.set_model("claude-opus-4-8")
+    cfg.set_effort("high")
+    # An explicit flag beats both config and built-in.
+    assert cfg.resolve_model("claude-haiku-4-5") == "claude-haiku-4-5"
+    assert cfg.resolve_effort("medium") == "medium"
+
+
+def test_resolve_effort_preserves_configured_empty_string(cfg):
+    # A configured '' (model without an effort knob) is load-bearing: it must
+    # survive resolution as '', not collapse to the built-in default.
     cfg.set_effort("")
-    model = None or cfg.get_model() or cfg.DEFAULT_MODEL
-    cfg_effort = cfg.get_effort()
-    effort = cfg_effort if cfg_effort is not None else cfg.DEFAULT_EFFORT
-    assert model == "claude-opus-4-8"
-    assert effort == ""  # configured empty wins, not collapsed to the built-in
+    assert cfg.resolve_effort(None) == ""
+
+
+def test_resolve_effort_empty_flag_is_explicit_not_unset(cfg):
+    # Passing '' on the flag is an explicit choice and wins over config.
+    cfg.set_effort("high")
+    assert cfg.resolve_effort("") == ""
