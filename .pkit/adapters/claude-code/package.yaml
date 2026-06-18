@@ -3,9 +3,10 @@ component:
   kind: adapter
   name: claude-code
   version: 0.5.0
-requires_backbone: ">=0.1.0,<1.93.0"
+requires_backbone: ">=0.1.0,<1.94.0"
 # Git-footprint paths this adapter deploys outside `.pkit/` (per ADR-009).
 # `pkit visibility private` routes these into `.git/info/exclude`.
 footprint:
   - .claude/skills
   - .claude/agents
+  - CLAUDE.md

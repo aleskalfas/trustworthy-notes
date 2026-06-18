@@ -10,6 +10,7 @@ Translates kit content for the [Claude Code](https://docs.claude.com/en/docs/cla
 ├── settings/
 │   ├── core/settings.json             # kit baseline — universal allows + denies
 │   └── project/settings.json          # adopter's project-specific additions
+├── merge-claude-md.sh                 # ensures root CLAUDE.md loads the kit rules via @-includes
 ├── deploy-skills.sh                   # creates .claude/skills/ symlinks pointing back at .pkit/skills/
 ├── permission-enforcement.yaml        # which permission dimensions this harness realizes, and via which layer
 └── permission-hook.py                 # the PreToolUse enforcement hook (registered by `pkit permissions enable`)
@@ -29,6 +30,18 @@ Top-level keys outside `permissions` (e.g. `agent`, `model`) in either `core/set
 **Ownership modes (COR-002 authoritative-region tier).** By default (`ownership_mode: additive`) the merge is append/union/baseline-enforce — it only ever *adds* to `permissions` and re-asserts the safety denies, never removing adopter entries. Under `ownership_mode: managed` (set via `pkit permissions mode managed`), the realizer **owns the `permissions` region** and regenerates it **wholesale** from its model projection: the merge replaces `.permissions` with the projection supplied per-run (via `$PKIT_MANAGED_REGION_FILE`, written by `pkit permissions apply`) instead of unioning it, so a grant removed from the model vanishes (drift heals down to empty) — everything *outside* `.permissions` stays byte-for-byte adopter-owned. This needs no in-file markers and no strip-logic: `permissions` is already stripped from every source and recomputed each run, so managed mode only swaps the *source* of that recompute. The owned region is the fixed realizer constant `.permissions` (the hook rides the separate top-level `hooks` key); the gate is the `ownership_mode` config flag, never file-presence, so a stray region file can't reactivate managed behaviour. Managed mode only replaces when a projection is actually supplied: a plain `pkit sync` in managed mode with no projection in hand falls through to the additive default (it never blanks the region). *(The `apply` realizer that generates the projection is a later increment; this section documents the merge-primitive tier it builds on.)*
 
 **Capability-contributed overlays** (per [project-management:DEC-030]). Installed capabilities can ship per-harness overlay templates and adopter-toggled live overlays under `.pkit/capabilities/<cap>/adapters/claude-code/overlay.template.json` (core-owned) and `.pkit/capabilities/<cap>/project/adapter-overlays/claude-code.json` (adopter-owned). `merge-settings.sh` walks manifest-registered capabilities; each capability whose adopter-owned overlay file is *present* contributes its top-level keys into the merge chain between `project/settings.json` and the existing target. The opt-in flow is the capability's own `enable-*` / `disable-*` CLI subcommand pair; for project-management, see `pkit project-management enable-default-agent`. Overlay `permissions` keys are reserved — silently stripped at merge time so overlays cannot influence allow/deny.
+
+### `merge-claude-md.sh`
+
+Ensures the adopter's root `CLAUDE.md` loads the kit-shipped rules (`@.pkit/rules/core.md`) and project rules (`@.pkit/rules/project.md`) via Claude Code's `@<path>` include mechanism. Per the COR-002 merge contract (insert-if-absent / create-if-none posture):
+
+- **No CLAUDE.md:** creates a minimal one with an H1 and the `@`-includes.
+- **CLAUDE.md without the include:** inserts the `@`-include block after the first H1 (per core.md rule 13's authoring convention — included sections must nest under the host's heading, not appear at line 1). If no H1 is found, prepends a minimal header + includes above the existing content.
+- **CLAUDE.md already has the include:** no-op (idempotent).
+
+Adopter content is never clobbered. Both `@.pkit/rules/core.md` (kit-owned, refreshed on sync) and `@.pkit/rules/project.md` (adopter-owned, never overwritten) are wired together so their rules compose in the agent's context.
+
+`merge-claude-md.sh` is an adapter primitive: `pkit init` and `pkit sync` invoke it (alongside `merge-settings.sh`, `deploy-skills.sh`, `deploy-agents.sh`) so the wiring is maintained automatically. Running it by hand is always safe.
 
 ### `deploy-skills.sh`
 
@@ -85,18 +98,17 @@ The per-adapter enforcement-capability declaration (per COR-028): which dimensio
 
 ## How adopters use this adapter
 
-Until the install/sync runtime per COR-004 lands, deployment is manual:
+The install/sync runtime (`pkit init` / `pkit sync`) automates all adapter primitives, invoking them in order. When running manually, the steps are:
 
-1. **Permissions.** Hand-merge `settings/core/settings.json` + `settings/project/settings.json` into your project's `.claude/settings.json`. Per COR-002's merge contract: append-only for adopter content, baseline-enforce for safety denies, idempotent.
-2. **Skills.** Run `.pkit/adapters/claude-code/deploy-skills.sh`. Creates the `.claude/skills/` symlinks (tracked in git per the project's `.gitignore`, so a fresh clone has the same environment).
-3. (Future) **Agents.** A `deploy-agents.sh` will land here once `.pkit/agents/` has content.
-4. **Permission enforcement (opt-in).** Run `pkit permissions enable` to register the PreToolUse hook; `pkit permissions disable` to remove it. See *Live permission enforcement* above.
-
-When the merge command exists, `pk merge` (or the equivalent verb) automates step 1 honouring the COR-002 contract; step 2 becomes part of the install/sync flow.
+1. **Permissions.** Hand-merge `settings/core/settings.json` + `settings/project/settings.json` into your project's `.claude/settings.json`. Per COR-002's merge contract: append-only for adopter content, baseline-enforce for safety denies, idempotent. Or just run `merge-settings.sh`.
+2. **Rules include.** Run `.pkit/adapters/claude-code/merge-claude-md.sh`. Ensures the root `CLAUDE.md` includes `@.pkit/rules/core.md` so the kit-shipped hard rules and tool-hygiene conventions load into the agent. Idempotent; never clobbers adopter content.
+3. **Skills.** Run `.pkit/adapters/claude-code/deploy-skills.sh`. Creates the `.claude/skills/` symlinks (tracked in git per the project's `.gitignore`, so a fresh clone has the same environment).
+4. **Agents.** Run `.pkit/adapters/claude-code/deploy-agents.sh` (once agents have content).
+5. **Permission enforcement (opt-in).** Run `pkit permissions enable` to register the PreToolUse hook; `pkit permissions disable` to remove it. See *Live permission enforcement* above.
 
 ### Git footprint (per ADR-009)
 
-This adapter declares its out-of-`.pkit/` deploys as a `footprint:` list in its `package.yaml` (`.claude/skills`, `.claude/agents`). `pkit visibility private` aggregates that with the backbone's `.pkit/` and routes the whole set into the per-clone `.git/info/exclude` — so a developer can run pkit on a repo whose team hasn't adopted it, with no committed trace. `pkit visibility shared` (the default, and what project-kit itself uses) keeps the deploys committed so a fresh clone shares the environment.
+This adapter declares its out-of-`.pkit/` deploys as a `footprint:` list in its `package.yaml` (`.claude/skills`, `.claude/agents`, `CLAUDE.md`). `pkit visibility private` aggregates that with the backbone's `.pkit/` and routes the whole set into the per-clone `.git/info/exclude` — so a developer can run pkit on a repo whose team hasn't adopted it, with no committed trace. `pkit visibility shared` (the default, and what project-kit itself uses) keeps the deploys committed so a fresh clone shares the environment.
 
 ## Project-kit's own use
 
