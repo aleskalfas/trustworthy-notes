@@ -86,6 +86,45 @@ def auth_clear_key():
     typer.echo("Cleared the saved key.")
 
 
+config_app = typer.Typer(help="Set tn's defaults (extraction model and effort), stored in your home.")
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("set-model")
+def config_set_model(model: str = typer.Argument(..., help="Claude model id, e.g. claude-opus-4-8.")):
+    """Save the default extraction model (used when no --model flag is given)."""
+    config.set_model(model)
+    typer.echo(f"Saved default model: {model} ({config.config_file()}).")
+
+
+@config_app.command("set-effort")
+def config_set_effort(
+    effort: str = typer.Argument(
+        ..., help="Effort: low | medium | high, or '' for models without an effort knob."
+    )
+):
+    """Save the default effort (used when no --effort flag is given)."""
+    config.set_effort(effort)
+    shown = effort or "'' (none)"
+    typer.echo(f"Saved default effort: {shown} ({config.config_file()}).")
+
+
+@config_app.command("show")
+def config_show():
+    """Show the resolved default model and effort, and where each comes from."""
+    saved_model = config.get_model()
+    saved_effort = config.get_effort()
+    model = saved_model or config.DEFAULT_MODEL
+    effort = saved_effort if saved_effort is not None else config.DEFAULT_EFFORT
+    model_src = "config" if saved_model else f"built-in ({config.DEFAULT_MODEL})"
+    effort_src = "config" if saved_effort is not None else f"built-in ({config.DEFAULT_EFFORT})"
+    effort_shown = effort or "'' (none)"
+    typer.echo(f"config file : {config.config_file()}")
+    typer.echo(f"model : {model}  (from {model_src})")
+    typer.echo(f"effort: {effort_shown}  (from {effort_src})")
+    typer.echo("A --model/--effort flag on `tn extract` overrides these.")
+
+
 def _parse_pages(spec: str, max_page: int) -> list[int]:
     """Parse a 1-based page spec like '15', '14-18', or '14,16,20'.
 
@@ -133,13 +172,15 @@ def extract(
     ),
     window: int = typer.Option(1, "--window", "-w", help="Neighbour text pages of context each side."),
     model: str = typer.Option(
-        "claude-opus-4-8", "--model", "-m",
-        help="Claude model. Cheaper: claude-sonnet-4-6, or claude-haiku-4-5 (use --effort '').",
+        None, "--model", "-m",
+        help="Claude model. Resolves: this flag > `model:` in config > built-in "
+        f"({config.DEFAULT_MODEL}). Cheaper still: claude-haiku-4-5 (use --effort '').",
     ),
     effort: str = typer.Option(
-        "low", "--effort", "-e",
+        None, "--effort", "-e",
         help="Effort: low | medium | high. Use '' for models without effort. "
-        "low is the default — medium/high let adaptive thinking run very long on this bounded task.",
+        "Resolves: this flag > `effort:` in config > built-in (low). "
+        "medium/high let adaptive thinking run very long on this bounded task.",
     ),
     gaps: bool = typer.Option(
         False, "--gaps", help="After each page, run the §7.6 gap report: source sentences no evidence covers."
@@ -163,6 +204,15 @@ def extract(
     """
     from .extract import run_extract, write_notes
     from .extract_anthropic import AnthropicExtractor
+
+    # Resolve in layers: explicit flag > user config > built-in default. The flag
+    # default is None, so "not passed" is distinguishable from "passed as ''"
+    # (a meaningful effort value for models without an effort knob).
+    if model is None:
+        model = config.get_model() or config.DEFAULT_MODEL
+    if effort is None:
+        cfg_effort = config.get_effort()
+        effort = cfg_effort if cfg_effort is not None else config.DEFAULT_EFFORT
 
     if config.auth_source() == "none":
         typer.echo(

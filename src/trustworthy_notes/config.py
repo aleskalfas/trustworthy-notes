@@ -27,6 +27,12 @@ from typing import Optional
 
 import yaml
 
+# Built-in defaults used when neither a flag nor the user config supplies a value.
+# Sonnet is the cost-appropriate default model; `low` keeps adaptive thinking from
+# running long on this bounded task.
+DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_EFFORT = "low"
+
 
 def config_dir() -> Path:
     override = os.environ.get("TN_CONFIG_DIR")
@@ -72,6 +78,34 @@ def clear_api_key() -> None:
     cfg = load()
     if cfg.pop("api_key", None) is not None:
         save(cfg)
+
+
+def get_model() -> Optional[str]:
+    """The user-configured extraction model, or None if unset."""
+    return load().get("model") or None
+
+
+def set_model(model: str) -> None:
+    cfg = load()
+    cfg["model"] = model
+    save(cfg)
+
+
+def get_effort() -> Optional[str]:
+    """The user-configured effort, or None if unset.
+
+    An empty string is a *meaningful* configured value (models without an effort
+    knob, e.g. Haiku), so it is returned as-is rather than collapsed to None;
+    only an absent key reads as unset.
+    """
+    cfg = load()
+    return cfg.get("effort") if "effort" in cfg else None
+
+
+def set_effort(effort: str) -> None:
+    cfg = load()
+    cfg["effort"] = effort
+    save(cfg)
 
 
 def auth_source() -> str:
