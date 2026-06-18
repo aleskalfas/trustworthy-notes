@@ -113,3 +113,69 @@ def test_extract_built_in_sonnet_when_nothing_set(cli, tmp_path, monkeypatch):
     assert res.exit_code == 0, res.stdout
     assert captured["model"] == "claude-sonnet-4-6"  # built-in default, NOT opus
     assert captured["effort"] == "low"
+
+
+def _mixed_document():
+    """A 4-page document with two text pages and two non-text pages, so the
+    page-type filter is observable. Page types mirror the layout classifier's
+    labels (text / figure / table / blank) that read_pages stamps onto PageText."""
+    return [
+        PageText(page_index=0, page_number=1, text="Intro prose.", width=1.0, height=1.0, page_type="text"),
+        PageText(page_index=1, page_number=2, text="(figure)", width=1.0, height=1.0, page_type="figure"),
+        PageText(page_index=2, page_number=3, text="More prose.", width=1.0, height=1.0, page_type="text"),
+        PageText(page_index=3, page_number=4, text="(blank)", width=1.0, height=1.0, page_type="blank"),
+    ]
+
+
+def _stub_extract_capturing_pages(cli, monkeypatch, doc):
+    """Stub the extract pipeline over `doc` and capture which page numbers reach
+    the extractor. Returns the list `extracted` that gets filled during the run."""
+    extracted: list[int] = []
+
+    monkeypatch.setattr(cli.ingest, "read_pages", lambda _input: doc)
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+    monkeypatch.setattr(cli.config, "get_api_key", lambda: "sk-test")
+    monkeypatch.setattr(cli.config, "get_model", lambda: None)
+    monkeypatch.setattr(cli.config, "get_effort", lambda: None)
+    monkeypatch.setattr(cli.workspace, "work_dir", lambda _input, _out: cli.Path("."))
+    monkeypatch.setattr(cli.workspace, "extract_dir", lambda _wd: cli.Path("."))
+    monkeypatch.setattr(cli.workspace, "page_notes_path", lambda _wd, idx: cli.Path(f"page-{idx}.yaml"))
+
+    class _NoopExtractor:
+        def __init__(self, **_kwargs):
+            pass
+
+    import trustworthy_notes.extract_anthropic as ea
+    import trustworthy_notes.extract as ex
+
+    monkeypatch.setattr(ea, "AnthropicExtractor", _NoopExtractor)
+
+    def _run_extract(page, *_a, **_k):
+        extracted.append(page.page_number)
+        return ({"statements": [], "evidence": [], "terms": [], "relations": []}, [])
+
+    monkeypatch.setattr(ex, "run_extract", _run_extract)
+    monkeypatch.setattr(ex, "write_notes", lambda *a, **k: None)
+    return extracted
+
+
+def test_extract_no_pages_selects_all_text_pages(cli, tmp_path, monkeypatch):
+    extracted = _stub_extract_capturing_pages(cli, monkeypatch, _mixed_document())
+
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_text("x")
+    res = runner.invoke(cli.app, ["extract", str(pdf)])  # no --pages
+    assert res.exit_code == 0, res.stdout
+    # Only the text pages (1 and 3) reach the extractor; figure/blank are skipped.
+    assert extracted == [1, 3]
+
+
+def test_extract_explicit_pages_overrides_default(cli, tmp_path, monkeypatch):
+    extracted = _stub_extract_capturing_pages(cli, monkeypatch, _mixed_document())
+
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_text("x")
+    res = runner.invoke(cli.app, ["extract", str(pdf), "--pages", "3"])
+    assert res.exit_code == 0, res.stdout
+    # Explicit range wins: only page 3, default text-page derivation not applied.
+    assert extracted == [3]

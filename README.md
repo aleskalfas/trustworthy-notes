@@ -52,9 +52,14 @@ progress. Useful commands now:
 tn layout INPUT.pdf                 # classify every page: text / figure / table / blank
 tn probe INPUT.pdf --pages 14-16    # dump the extracted text of chosen pages
 tn render INPUT.pdf --pages 15 -o scans   # annotated scan PNGs (header/columns/footnotes)
-tn extract INPUT.pdf --pages 14-17  # extract notes (needs auth) — see output convention below
+tn extract INPUT.pdf                # extract notes from ALL text pages (needs auth)
+tn extract INPUT.pdf --pages 14-17  # …or just a range — see output convention below
 tn gap INPUT.pdf --pages 14         # §7.6 coverage report on already-extracted notes
 ```
+
+`--pages` is optional: omit it and `tn extract` does every text page of the
+document (figure / table / blank pages are skipped automatically, using the same
+classification as `tn layout`). Pass a range to override that default.
 
 ### Choosing the model and effort
 

@@ -165,7 +165,10 @@ def _render_page(p) -> str:
 @app.command()
 def extract(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
-    pages: str = typer.Option(..., "--pages", "-p", help="Page(s): '14', '14-17', or '14,16'."),
+    pages: str = typer.Option(
+        None, "--pages", "-p",
+        help="Page(s): '14', '14-17', or '14,16'. Optional — default: all text pages of the document.",
+    ),
     out: Path = typer.Option(
         None, "--out", "-o", file_okay=False,
         help="Output dir. Default: a folder beside the PDF (data/Foo.pdf → data/Foo.pdf.notes/).",
@@ -224,10 +227,20 @@ def extract(
 
     all_pages = ingest.read_pages(input)
     by_number = {p.page_number: p for p in all_pages}
-    selected = _parse_pages(pages, len(all_pages))
-    if not selected:
-        typer.echo(f"no pages in range 1..{len(all_pages)} matched {pages!r}", err=True)
-        raise typer.Exit(1)
+    if pages is None:
+        # No range given: default to every text page. read_pages already ran the
+        # same layout classification the `layout` command uses (classify_page),
+        # so non-text pages (figure/table/blank) never reach the extractor.
+        selected = [p.page_number for p in all_pages if p.page_type == "text"]
+        if not selected:
+            typer.echo(f"no text pages found in {input.name}", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"no --pages given: extracting all {len(selected)} text page(s)", err=True)
+    else:
+        selected = _parse_pages(pages, len(all_pages))
+        if not selected:
+            typer.echo(f"no pages in range 1..{len(all_pages)} matched {pages!r}", err=True)
+            raise typer.Exit(1)
     out = workspace.work_dir(input, out)
     workspace.extract_dir(out).mkdir(parents=True, exist_ok=True)
     typer.echo(f"writing notes to {workspace.extract_dir(out)}/", err=True)
