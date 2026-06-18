@@ -17,19 +17,18 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from importlib.resources import files
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from .normalize import quote_is_anchored
+from .resources import read_text
 
 
 @lru_cache(maxsize=1)
 def load_notes_schema() -> dict[str, Any]:
     """Load the notes JSON Schema shipped inside the package."""
-    text = (files("trustworthy_notes") / "schemas" / "notes.schema.json").read_text(encoding="utf-8")
-    return json.loads(text)
+    return json.loads(read_text("schemas", "notes.schema.json"))
 
 
 def validate_structure(data: dict[str, Any]) -> list[str]:
