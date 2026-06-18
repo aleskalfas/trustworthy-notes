@@ -20,6 +20,11 @@ tn = "trustworthy_notes.cli:app"
 dev = [
     "pytest>=8",
 ]
+# Freezing the CLI into a one-file executable (see tn.spec / docs/PACKAGING.md).
+# Kept separate from dev so test runs don't pull the build toolchain.
+build = [
+    "pyinstaller>=6",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

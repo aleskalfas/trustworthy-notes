@@ -14,15 +14,33 @@ and the command's options. No version numbers to remember to bump.
 from __future__ import annotations
 
 import hashlib
+import sys
 import time
 from pathlib import Path
 from typing import Callable
 
 import typer
 
-from . import ingest, models, translit, workspace
+from . import build, ingest, models, translit, workspace
 
 _HEADER = "# tn artifact"
+
+
+def _code_identity() -> bytes:
+    """Bytes identifying the output-producing code, for cache invalidation.
+
+    In a dev checkout, hash the source of the modules an artifact depends on
+    (``ingest``/``translit``/``models``) for fine-grained invalidation — editing
+    one rebuilds the dependent artifacts. A frozen build has no ``.py`` on disk,
+    so fall back to the baked build identity (version + build stamp), which is
+    stable within a build and distinct across builds whose code differs.
+    """
+    if getattr(sys, "frozen", False):
+        return build.build_identity().encode()
+    parts = []
+    for mod in (ingest, translit, models):
+        parts.append(Path(mod.__file__).read_bytes())
+    return b"".join(parts)
 
 
 def inputs_fingerprint(pdf_path: str | Path, work_dir: str | Path, params: str = "") -> str:
@@ -30,8 +48,7 @@ def inputs_fingerprint(pdf_path: str | Path, work_dir: str | Path, params: str =
     the command options — changes whenever any output-affecting input changes."""
     h = hashlib.sha256()
     h.update(Path(pdf_path).read_bytes())
-    for mod in (ingest, translit, models):
-        h.update(Path(mod.__file__).read_bytes())
+    h.update(_code_identity())
     for f in sorted(workspace.extract_dir(work_dir).glob("page-*.notes.yaml")):
         s = f.stat()
         h.update(f"{f.name}:{s.st_size}:{s.st_mtime_ns}".encode())

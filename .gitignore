@@ -9,6 +9,10 @@ __pycache__/
 build/
 dist/
 
+# Build stamp baked at freeze time by scripts/stamp_build.py — generated, never
+# committed (a clean checkout falls back to the "dev" stamp; see build.py).
+src/trustworthy_notes/_build_stamp.py
+
 # OS junk
 .DS_Store
 
