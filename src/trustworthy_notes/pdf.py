@@ -14,8 +14,9 @@ gaps. Pure-Python (reportlab); no system binaries.
 
 from __future__ import annotations
 
-import importlib.resources
 import re
+import shutil
+import tempfile
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -28,6 +29,8 @@ from reportlab.platypus import (
     BaseDocTemplate, Frame, PageBreak, PageTemplate, Paragraph, Spacer, Table, TableStyle,
 )
 
+from .resources import package_path
+
 # We embed ONE full-coverage Unicode serif — Charis SIL (SIL Open Font License,
 # bundled under trustworthy_notes/fonts/) — and set the whole document in it. Charis covers
 # everything the source needs in proper Unicode: Latin-Extended letters in scholars'
@@ -39,15 +42,29 @@ _FONT, _FONT_BOLD, _FONT_ITALIC = "Helvetica", "Helvetica-Bold", "Helvetica-Obli
 
 
 def _register_serif() -> bool:
-    """Register the bundled Charis SIL family (regular/bold/italic/bold-italic)."""
+    """Register the bundled Charis SIL family (regular/bold/italic/bold-italic).
+
+    reportlab's ``TTFont`` opens fonts by filename, and it may defer that open
+    past registration — so the path handed to it must stay valid for the whole
+    process, not just for one ``package_path`` block. Under a freeze the seam's
+    path can be a temp extraction that ``as_file`` deletes on block exit, so we
+    do NOT register from it directly. Instead we copy each face once into a
+    single process-lifetime temp dir and register from those stable paths. That
+    removes the dependence on reportlab's load timing (whether it reads eagerly
+    or lazily, the file is still there). The temp dir is left for the OS to
+    reclaim on process exit — it is tiny and lives exactly as long as we need it.
+    """
     faces = {
         "Charis": "Charis-Regular.ttf", "Charis-Bold": "Charis-Bold.ttf",
         "Charis-Italic": "Charis-Italic.ttf", "Charis-BoldItalic": "Charis-BoldItalic.ttf",
     }
-    fdir = importlib.resources.files("trustworthy_notes") / "fonts"
     try:
+        stable_dir = Path(tempfile.mkdtemp(prefix="tn-fonts-"))
         for name, fn in faces.items():
-            pdfmetrics.registerFont(TTFont(name, str(fdir / fn)))
+            dest = stable_dir / fn
+            with package_path("fonts", fn) as fpath:
+                shutil.copyfile(fpath, dest)
+            pdfmetrics.registerFont(TTFont(name, str(dest)))
         pdfmetrics.registerFontFamily(
             "Charis", normal="Charis", bold="Charis-Bold",
             italic="Charis-Italic", boldItalic="Charis-BoldItalic")
