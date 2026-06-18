@@ -7,10 +7,10 @@ from pathlib import Path
 from trustworthy_notes import workspace
 
 
-def test_default_work_dir_is_sibling_dot_notes_folder():
-    assert workspace.work_dir("data/Foo.pdf") == Path("data/Foo.pdf.notes")
+def test_default_work_dir_is_sibling_dot_tnotes_folder():
+    assert workspace.work_dir("data/Foo.pdf") == Path("data/Foo.pdf.tnotes")
     assert workspace.work_dir("/abs/path/Kim_2013_BAR_2513.pdf") == Path(
-        "/abs/path/Kim_2013_BAR_2513.pdf.notes"
+        "/abs/path/Kim_2013_BAR_2513.pdf.tnotes"
     )
 
 
@@ -25,8 +25,8 @@ def test_override_wins():
 
 def test_page_notes_path():
     # per-page notes live in the 1-extract wave folder inside the work dir
-    assert workspace.page_notes_path("data/Foo.pdf.notes", 13) == Path(
-        "data/Foo.pdf.notes/1-extract/page-0013.notes.yaml"
+    assert workspace.page_notes_path("data/Foo.pdf.tnotes", 13) == Path(
+        "data/Foo.pdf.tnotes/1-extract/page-0013.notes.yaml"
     )
 
 

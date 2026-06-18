@@ -1,4 +1,4 @@
-"""User-level config for tn — auth credentials and defaults.
+"""User-level config for tnotes — auth credentials and defaults.
 
 The API key is stored in ``~/.trustworthy-notes/config.yaml`` (in your home, NOT
 the repo). ``TN_CONFIG_DIR`` overrides the location (used by tests). Because the
@@ -129,7 +129,7 @@ def resolve_effort(flag: Optional[str]) -> str:
 
 
 def auth_source() -> str:
-    """Where tn will get Claude credentials: 'config' | 'env' | 'login' | 'none'."""
+    """Where tnotes will get Claude credentials: 'config' | 'env' | 'login' | 'none'."""
     if get_api_key():
         return "config"
     if os.environ.get("ANTHROPIC_API_KEY"):

@@ -16,8 +16,8 @@ Two levels, used consistently throughout:
 - **Wave** — a top-level pipeline phase (§1): `0 ingest · 1 extract · 2 compose ·
   3 validate · 4 export`. The per-document **workspace folders are named by wave**
   (`1-extract/`, `2-compose/`, `3-validate/`) — the number is the *phase an output
-  belongs to (its role)*, **not** the order commands were run. So `tn gap`
-  (validate) writes to `3-validate/` and `tn dedup` (compose) writes to
+  belongs to (its role)*, **not** the order commands were run. So `tnotes gap`
+  (validate) writes to `3-validate/` and `tnotes dedup` (compose) writes to
   `2-compose/` regardless of which you ran first.
 - **Stage** — an internal step *within a wave*. Only **Wave 2 (compose)** has
   stages, numbered 0–6 (§6): `0 load · 1 chapter-group · 2 stitch · 3 dedup ·
@@ -28,15 +28,15 @@ Command → wave/stage → output:
 
 | Command | Wave / stage | Saves to |
 |---|---|---|
-| `tn extract` | Wave 1 | `1-extract/page-NNNN.notes.yaml` |
-| `tn chapters` | Wave 2, stage 0–1 | `2-compose/1-chapter-map/chapters.txt` |
-| `tn stitches` | Wave 2, stage 2 | `2-compose/2-stitches/stitches.txt` |
-| `tn dedup` | Wave 2, stage 3 | `2-compose/3-dedup/` (dedup.txt, dedup-merges.yaml) |
-| `tn terms` | Wave 2, stage 4 | `2-compose/4-terms/` (terms.txt, terms.yaml) |
-| `tn relations` | Wave 2, stage 5 | `2-compose/5-relations/` (relations.txt, relations.yaml) |
-| `tn assemble` | Wave 2, stage 6 | `2-compose/6-chapters/chapter-NNN.notes.yaml` |
-| `tn gap` | Wave 3 | `3-validate/gaps.txt` |
-| `tn export [--pdf]` | Wave 4 | `4-export/chapter-NNN.<style>.md` (+ `.pdf`) |
+| `tnotes extract` | Wave 1 | `1-extract/page-NNNN.notes.yaml` |
+| `tnotes chapters` | Wave 2, stage 0–1 | `2-compose/1-chapter-map/chapters.txt` |
+| `tnotes stitches` | Wave 2, stage 2 | `2-compose/2-stitches/stitches.txt` |
+| `tnotes dedup` | Wave 2, stage 3 | `2-compose/3-dedup/` (dedup.txt, dedup-merges.yaml) |
+| `tnotes terms` | Wave 2, stage 4 | `2-compose/4-terms/` (terms.txt, terms.yaml) |
+| `tnotes relations` | Wave 2, stage 5 | `2-compose/5-relations/` (relations.txt, relations.yaml) |
+| `tnotes assemble` | Wave 2, stage 6 | `2-compose/6-chapters/chapter-NNN.notes.yaml` |
+| `tnotes gap` | Wave 3 | `3-validate/gaps.txt` |
+| `tnotes export [--pdf]` | Wave 4 | `4-export/chapter-NNN.<style>.md` (+ `.pdf`) |
 
 Wave 2 is multi-stage, so its folder is itself split into stage-numbered subfolders
 (`2-compose/1-chapter-map/` … `6-chapters/`) — the deliverables (`6-chapters/`) kept
@@ -77,7 +77,7 @@ apart from the per-stage views/data.
 
 Inputs, working artifacts, and outputs live in **user-owned folders, never in
 the repo** (a per-document workspace). This is operational, not methodology;
-spec is being worked out (see the data-flow discussion / planned `tn` CLI +
+spec is being worked out (see the data-flow discussion / planned `tnotes` CLI +
 `.trustworthy-notes/config.yaml`).
 
 ---
@@ -94,7 +94,7 @@ spec is being worked out (see the data-flow discussion / planned `tn` CLI +
 | `src/trustworthy_notes/validation.py` | `validate_structure`, `check_traceability` — the §7 checks as code | §7.5 schema-valid, §7.1 grounded, §7.3 well-typed (via schema); §7.4 referential integrity; §7.2 traceability (`text` only) | built; §7.6 coverage **planned** |
 | `src/trustworthy_notes/extract.py` | Wave 1: `Extractor` protocol + `anchor_gate` + `run_extract` + `write_notes` | §7.1 grounded & §7.2 traceable **enforced at extraction** (drops unanchored evidence + ungrounded statements) | built |
 | `src/trustworthy_notes/extract_anthropic.py` | Wave 1 Claude adapter: prompt-cached methodology rules + structured output → `assemble` ids; `claude-opus-4-8`, adaptive thinking, `effort: medium` | the whole notes model (§4, §5, §6) as extraction instructions | built (unit-tested with a fake client; live behaviour to be tuned) |
-| `src/trustworthy_notes/cli.py` | The `tn` command: `extract` (Wave 1, Claude), `probe` (per-page dump), `render` (annotated scan PNGs), `layout` (page-type sweep) | — (operational / inspection surface) | built |
+| `src/trustworthy_notes/cli.py` | The `tnotes` command: `extract` (Wave 1, Claude), `probe` (per-page dump), `render` (annotated scan PNGs), `layout` (page-type sweep) | — (operational / inspection surface) | built |
 | `tests/test_normalize.py` · `test_notes.py` · `test_ingest.py` | Conformance: anchoring rule, §7 validity, and ingest layout classification | §6 · §7.1–§7.5 · §4.5/§4.6 · Wave-0 routing | built |
 | `tests/fixtures/notes.printed-p3.yaml` | Hand-built golden notes-set (printed p.3) | the whole model — the executable example the validators run against | built |
 
@@ -150,7 +150,7 @@ Every methodology section, and where it lives in the implementation.
   `script` tag; inline-glyph `⟨glyph-HASH⟩` placeholders; footnote-ref `[^N]`
   markers; the anchoring normalizer; the notes schema (text path); the §7.1–§7.5
   validators; the **Wave-1 extractor — provider-agnostic core + anchor gate +
-  Claude adapter** (`tn extract`); the `probe` / `render` / `layout` CLIs;
+  Claude adapter** (`tnotes extract`); the `probe` / `render` / `layout` CLIs;
   golden fixture + tests (53 passing).
 - **Reserved** (shape declared in schema/methodology, no behaviour yet):
   `figure`/`table` *evidence kinds* in the notes model (§4.4, §6); `chapter`
@@ -170,7 +170,7 @@ Every methodology section, and where it lives in the implementation.
 
 ## 6. Wave 2 (compose) — design & status [built]
 
-> **Status:** stages 0–6 built (`tn chapters/stitches/dedup/terms/relations/assemble`).
+> **Status:** stages 0–6 built (`tnotes chapters/stitches/dedup/terms/relations/assemble`).
 > `assemble` produces validated `chapter-NNN.notes.yaml`. **Deferred:** applying
 > cross-page **stitches** at assembly (needs a spanning-evidence representation —
 > `page_index_end` — plus a §7.2 traceability update for it); they are computed and

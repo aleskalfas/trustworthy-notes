@@ -1,12 +1,12 @@
-# One-command setup for the `tn` command on Windows (PowerShell).
+# One-command setup for the `tnotes` command on Windows (PowerShell).
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
 #
-# Installs uv (if missing) and the `tn` command. Then, in a NEW terminal:
-#   tn auth set-key
-#   tn extract <pdf> --pages 14 --model claude-sonnet-4-6 --out data\notes
+# Installs uv (if missing) and the `tnotes` command. Then, in a NEW terminal:
+#   tnotes auth set-key
+#   tnotes extract <pdf> --pages 14 --model claude-sonnet-4-6 --out data\notes
 #
-# This is all `tn` needs to be functional (the API-key path). `mise`/`ant` are
+# This is all `tnotes` needs to be functional (the API-key path). `mise`/`ant` are
 # only for the optional account-login path - see README.
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -17,11 +17,11 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"   # so this script can use uv now
 }
 
-Write-Host "-> installing the tn command..."
+Write-Host "-> installing the tnotes command..."
 uv tool install --editable . --reinstall
 uv tool update-shell
 
 Write-Host ""
 Write-Host "Done. Open a NEW terminal (so PATH refreshes), then:"
-Write-Host "    tn auth set-key"
-Write-Host "    tn extract `"<your.pdf>`" --pages 14 --model claude-sonnet-4-6 --out data\notes"
+Write-Host "    tnotes auth set-key"
+Write-Host "    tnotes extract `"<your.pdf>`" --pages 14 --model claude-sonnet-4-6 --out data\notes"

@@ -1,8 +1,8 @@
-# Packaging tn as a one-file executable
+# Packaging tnotes as a one-file executable
 
-`tn` ships as a pure-Python CLI, but a one-file [PyInstaller](https://pyinstaller.org)
+`tnotes` ships as a pure-Python CLI, but a one-file [PyInstaller](https://pyinstaller.org)
 build lets someone run it with no Python install. This note covers how to produce
-that build and the three things that make a freeze of `tn` correct rather than
+that build and the three things that make a freeze of `tnotes` correct rather than
 broken-at-runtime.
 
 ## Build it
@@ -12,19 +12,19 @@ plain test run doesn't pull it. Bake the build stamp (see below), then freeze:
 
 `python scripts/stamp_build.py && uv run --with pyinstaller pyinstaller tn.spec`
 
-Output is a single executable at `dist/tn`. Smoke-test it:
+Output is a single executable at `dist/tnotes`. Smoke-test it:
 
-`./dist/tn --help`
+`./dist/tnotes --help`
 
 The spec (`tn.spec`) is the source of truth; the equivalent flag form is:
 
-`uv run --with pyinstaller pyinstaller --onefile --name tn --collect-data trustworthy_notes --collect-data pdfminer --copy-metadata jsonschema src/trustworthy_notes/__main__.py`
+`uv run --with pyinstaller pyinstaller --onefile --name tnotes --collect-data trustworthy_notes --collect-data pdfminer --copy-metadata jsonschema src/trustworthy_notes/__main__.py`
 
 ## Why a naive freeze breaks, and what the spec does about it
 
 A frozen one-file build has no source tree on disk: the package's files are
 unpacked under a temporary `_MEIPASS` directory at launch, and only what the spec
-*tells* PyInstaller to bundle comes along. Three `tn` concerns hit that wall.
+*tells* PyInstaller to bundle comes along. Three `tnotes` concerns hit that wall.
 
 1. **Bundled package data — fonts and the JSON Schema.** The Charis SIL fonts
    (`trustworthy_notes/fonts/`) and the notes schema (`trustworthy_notes/schemas/`)
@@ -37,7 +37,7 @@ unpacked under a temporary `_MEIPASS` directory at launch, and only what the spe
 
 2. **pdfminer's cmap data.** pdfminer (under pdfplumber) reads character-map data
    files at runtime to decode text. Same story — data, not code — so the spec adds
-   `collect_data_files("pdfminer")`. pdfminer finds these itself; there's no `tn`
+   `collect_data_files("pdfminer")`. pdfminer finds these itself; there's no `tnotes`
    runtime call involved, only the bundling.
 
 3. **jsonschema's metadata.** jsonschema discovers its validator classes through

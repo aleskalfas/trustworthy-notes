@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-tn = "trustworthy_notes.cli:app"
+tnotes = "trustworthy_notes.cli:app"
 
 [dependency-groups]
 dev = [

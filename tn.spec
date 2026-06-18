@@ -1,7 +1,7 @@
-# PyInstaller one-file build for the tn CLI.
+# PyInstaller one-file build for the tnotes CLI.
 #
 # Build:  uv run --with pyinstaller pyinstaller tn.spec
-# Output: dist/tn  (a single self-contained executable)
+# Output: dist/tnotes  (a single self-contained executable)
 #
 # Bake the build stamp BEFORE freezing so the frozen exe has a distinct cache
 # identity (see build.py / docs/PACKAGING.md). Run first:
@@ -20,7 +20,7 @@
 #     unless the .dist-info is copied in.
 #
 # The equivalent one-liner (kept in sync with docs/PACKAGING.md) is:
-#   uv run --with pyinstaller pyinstaller --onefile --name tn \
+#   uv run --with pyinstaller pyinstaller --onefile --name tnotes \
 #       --collect-data trustworthy_notes --collect-data pdfminer \
 #       --hidden-import trustworthy_notes._build_stamp \
 #       --copy-metadata jsonschema src/trustworthy_notes/__main__.py
@@ -54,7 +54,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="tn",
+    name="tnotes",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
