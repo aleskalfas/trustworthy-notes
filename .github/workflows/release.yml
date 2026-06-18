@@ -1,0 +1,92 @@
+name: release
+
+# Build and publish the one-file Windows tnotes.exe on a version tag.
+#
+# Trigger: push a `vX.Y.Z` tag. The job freezes the CLI with PyInstaller on a
+# Windows runner, smoke-tests the resulting exe (it loads, and it renders a PDF
+# through the *bundled* Charis font — the #5 frozen-resource risk), and attaches
+# tnotes.exe to a GitHub Release for that tag so an end user can download it with
+# no Python and no account.
+#
+# The build stamp is baked BEFORE freezing (scripts/stamp_build.py) so the frozen
+# exe has a distinct cache identity, and the job then asserts that identity is not
+# `+dev` — a loud failure if a future spec change drops the _build_stamp hidden
+# import and silently ships colliding cache keys (issue #6, architect-deferred).
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Needed for the publish step to create the Release and upload the asset.
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the tagged commit (full history)
+        uses: actions/checkout@v4
+        with:
+          # Full history so scripts/stamp_build.py can resolve the git short SHA
+          # for the build stamp (a shallow checkout still has HEAD, but we take
+          # the whole history to be safe against future stamp logic).
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: "Install dependencies (incl. the build group: pyinstaller)"
+        run: uv sync --group build
+
+      - name: Bake the build stamp before freezing
+        # Generates src/trustworthy_notes/_build_stamp.py from the git short SHA
+        # (honoring TN_BUILD_STAMP). Must run before pyinstaller so the freeze
+        # bundles a non-dev identity. We pin the stamp to the release tag's SHA.
+        env:
+          TN_BUILD_STAMP: git-${{ github.sha }}
+        run: uv run python scripts/stamp_build.py
+
+      - name: Assert the build identity is not +dev
+        # Guard (issue #6): if a spec change ever drops the _build_stamp hidden
+        # import, build_identity() falls back to "<version>+dev" and two builds
+        # with different code collide on the same cache key. Fail loudly here
+        # rather than ship that silently.
+        run: |
+          uv run python -c "import sys; from trustworthy_notes.build import build_identity; ident = build_identity(); print('build identity:', ident); sys.exit('build identity is +dev (stamp not baked) — refusing to ship: ' + ident) if ident.endswith('+dev') else None"
+
+      - name: Freeze the one-file exe
+        run: uv run pyinstaller tn.spec
+
+      - name: Smoke test — exe loads and reports help
+        run: |
+          dist\tnotes.exe --help
+
+      - name: Smoke test — render a PDF through the bundled Charis font
+        # Exercises the #5 frozen-resource path: book renders Markdown to PDF via
+        # reportlab + the Charis font that travels inside the freeze. No API key
+        # and no PDF fixture needed — book reads the fabricated export dir and
+        # only uses the source path for naming. --all skips the prose-only filter.
+        shell: pwsh
+        run: |
+          $work = "smoke"
+          New-Item -ItemType Directory -Force -Path "$work\fixture.pdf.tnotes\4-export" | Out-Null
+          # A placeholder source file; book requires it to exist but never opens it.
+          New-Item -ItemType File -Force -Path "$work\fixture.pdf" | Out-Null
+          @"
+          # Smoke chapter
+
+          A line with Unicode the bundled Charis font must cover: Myśliwiec, ꜣ ꜥ ḥ ẖ š ṯ.
+          "@ | Set-Content -Encoding utf8 "$work\fixture.pdf.tnotes\4-export\chapter-001.outline.md"
+          dist\tnotes.exe book "$work\fixture.pdf" --all
+          if (-not (Test-Path "$work\fixture.tnotes.pdf")) {
+            throw "book did not produce fixture.tnotes.pdf — font/render smoke test failed"
+          }
+          Write-Host "rendered $work\fixture.tnotes.pdf"
+
+      - name: Publish tnotes.exe to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/tnotes.exe
+          fail_on_unmatched_files: true
