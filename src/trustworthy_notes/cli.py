@@ -91,11 +91,15 @@ def _main(
         help="Show the tnotes version and exit.",
     ),
 ) -> None:
-    """Sweep a stale upgrade leftover, then dispatch the subcommand.
+    """Sweep a stale upgrade leftover and offer a one-tap upgrade, then dispatch.
 
     `tnotes upgrade` renames the running exe to tnotes.exe.old (Windows won't let a
     running exe be deleted); by the next launch that process has exited, so this is
     where the leftover gets removed. Cheap and silent on every other invocation.
+
+    This callback fires for *every* invocation, including the eager `--version` /
+    `--help` paths — but those exit before this body runs (their callbacks/Click
+    handle them first), so the nudge never touches their output.
     """
     from . import updater
 
@@ -103,6 +107,65 @@ def _main(
     # run sys.executable is the interpreter, so there is nothing of ours to sweep.
     if updater.is_frozen():
         updater.cleanup_stale()
+        _maybe_nudge_upgrade()
+
+
+def _interactive() -> bool:
+    """True only when both stdin and stdout are real terminals.
+
+    The nudge prompts on stdin, so it must run only when a human can answer. A
+    redirected/piped/captured run (e.g. CI's `tnotes.exe --help` with stdout
+    captured) is not interactive, and prompting there would block forever — so we
+    gate the whole prompt on this. Factored out so it can be stubbed in tests
+    (CliRunner swaps the std streams, which makes patching isatty directly brittle).
+    """
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _maybe_nudge_upgrade() -> None:
+    """If a newer release exists, offer a one-keypress upgrade. Never blocks or breaks.
+
+    Three guards keep this from ever harming a normal or automated run:
+
+    * **Non-interactive → no prompt.** If stdin or stdout is not a TTY (redirected,
+      piped, or captured — as in CI's `tnotes.exe --help` smoke), we skip silently
+      rather than block waiting on stdin that will never arrive. This is the guard
+      that guarantees the check can never hang automation.
+    * **Frozen-only + cached + short-timeout + silent-fail** all live in
+      :func:`updater.check_for_update`; a failed/slow check returns ``None`` here.
+    * **Decline proceeds normally.** Answering no (or anything but yes) just returns,
+      and the requested command runs as if the nudge never happened.
+
+    On yes, we hand off to the very same `tnotes upgrade` path (the updater's
+    ``upgrade``), then exit so the user restarts into the new build.
+    """
+    from . import updater
+
+    if not _interactive():
+        return
+
+    latest = updater.check_for_update()
+    if not latest:
+        return
+
+    answer = typer.prompt(
+        f"tnotes v{latest} is available — upgrade now? [Y/n]",
+        default="Y",
+        show_default=False,
+    ).strip().lower()
+    if answer not in ("", "y", "yes"):
+        return  # declined — fall through to the requested command
+
+    def log(msg: str) -> None:
+        typer.echo(msg, err=True)
+
+    try:
+        outcome = updater.upgrade(log=log)
+    except updater.UpgradeError as exc:
+        typer.echo(f"tnotes upgrade: {exc}", err=True)
+        raise typer.Exit(1)
+    typer.echo(outcome.message)
+    raise typer.Exit(0)
 
 
 @app.command(name="run", hidden=True)
@@ -242,6 +305,22 @@ def config_set_effort(
     config.set_effort(effort)
     shown = effort or "'' (none)"
     typer.echo(f"Saved default effort: {shown} ({config.config_file()}).")
+
+
+@config_app.command("set-no-update-check")
+def config_set_no_update_check(
+    disabled: bool = typer.Argument(
+        ..., help="true to silence the launch-time upgrade nudge, false to re-enable it."
+    )
+):
+    """Opt out of (or back into) the launch-time upgrade nudge.
+
+    The same effect as setting TNOTES_NO_UPDATE_CHECK=1 in your environment, but
+    persisted in your config. The nudge only ever appears on the Windows tnotes.exe.
+    """
+    config.set_no_update_check(disabled)
+    state = "off" if disabled else "on"
+    typer.echo(f"Launch-time upgrade nudge: {state} ({config.config_file()}).")
 
 
 @config_app.command("show")

@@ -48,6 +48,16 @@ def test_config_show_built_in_defaults_when_unset(cli):
     assert "built-in" in res.stdout
 
 
+def test_config_set_no_update_check_round_trips(cli):
+    assert cli.config.get_no_update_check() is False  # default: nudge on
+    res = runner.invoke(cli.app, ["config", "set-no-update-check", "true"])
+    assert res.exit_code == 0
+    assert cli.config.get_no_update_check() is True
+    res = runner.invoke(cli.app, ["config", "set-no-update-check", "false"])
+    assert res.exit_code == 0
+    assert cli.config.get_no_update_check() is False
+
+
 def _stub_extract_pipeline(cli, monkeypatch):
     """Stub ingest + extraction so `tnotes extract` runs without a PDF or network,
     and return a dict that captures the (model, effort) the extractor saw."""

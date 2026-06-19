@@ -274,3 +274,137 @@ def test_upgrade_aborts_when_download_is_not_launchable(monkeypatch, tmp_path):
     assert target.read_text() == "OLD running exe"  # never swapped
     assert not (tmp_path / "tnotes.exe.old").exists()
     assert [p.name for p in tmp_path.iterdir()] == ["tnotes.exe"]
+
+
+# --- the launch-time update check (issue #8) ---
+#
+# check_for_update() is the network/cache half of the nudge: it answers "is a newer
+# release available?" and must NEVER raise and NEVER do a network call within the
+# daily window. (The TTY/prompt half lives in cli and is tested in test_cli_upgrade.)
+
+
+def _frozen_check(monkeypatch, tmp_path, *, version="0.1.0"):
+    """Make check_for_update see a frozen build at version, with config in tmp_path."""
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "running_version", lambda: version)
+    monkeypatch.setenv("TN_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.delenv("TNOTES_NO_UPDATE_CHECK", raising=False)
+
+
+def test_check_returns_the_newer_version_when_behind(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path, version="0.1.0")
+    latest = updater.check_for_update(get=lambda *a, **k: _release_json("v0.2.0"))
+    assert latest == "0.2.0"
+
+
+def test_check_returns_none_when_up_to_date(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path, version="0.2.0")
+    assert updater.check_for_update(get=lambda *a, **k: _release_json("v0.2.0")) is None
+
+
+def test_check_skips_when_not_frozen(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path)
+    monkeypatch.setattr(updater, "is_frozen", lambda: False)
+
+    def must_not_call(*a, **k):
+        raise AssertionError("source run must not hit the network")
+
+    assert updater.check_for_update(get=must_not_call) is None
+
+
+def test_check_skips_when_opted_out_by_env(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path)
+    monkeypatch.setenv("TNOTES_NO_UPDATE_CHECK", "1")
+
+    def must_not_call(*a, **k):
+        raise AssertionError("opt-out must not hit the network")
+
+    assert updater.check_for_update(get=must_not_call) is None
+
+
+def test_check_skips_when_opted_out_by_config(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path)
+    from trustworthy_notes import config
+
+    config.set_no_update_check(True)
+
+    def must_not_call(*a, **k):
+        raise AssertionError("config opt-out must not hit the network")
+
+    assert updater.check_for_update(get=must_not_call) is None
+
+
+def test_check_swallows_every_error_and_returns_none(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path)
+
+    def boom(*a, **k):
+        raise OSError("network down")
+
+    # Offline / any failure must be swallowed — never raises, returns None.
+    assert updater.check_for_update(get=boom) is None
+
+
+def test_check_uses_a_short_timeout(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path)
+    seen = {}
+
+    def get(url, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        return _release_json("v0.2.0")
+
+    updater.check_for_update(get=get)
+    assert seen["timeout"] == updater._CHECK_TIMEOUT_S
+
+
+def test_check_caches_and_skips_the_network_within_a_day(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path, version="0.1.0")
+    calls = {"n": 0}
+
+    def counting_get(url, **k):
+        calls["n"] += 1
+        return _release_json("v0.2.0")
+
+    # First check at t=0 hits the network and caches the result.
+    assert updater.check_for_update(get=counting_get, now=lambda: 0.0) == "0.2.0"
+    assert calls["n"] == 1
+
+    # An hour later: within the window, reuse the cache, no second request.
+    def must_not_call(*a, **k):
+        raise AssertionError("within the cache window — no network call expected")
+
+    assert updater.check_for_update(get=must_not_call, now=lambda: 3600.0) == "0.2.0"
+    assert calls["n"] == 1
+
+
+def test_check_refreshes_after_the_cache_window(monkeypatch, tmp_path):
+    _frozen_check(monkeypatch, tmp_path, version="0.1.0")
+    calls = {"n": 0}
+
+    def counting_get(url, **k):
+        calls["n"] += 1
+        return _release_json("v0.2.0")
+
+    assert updater.check_for_update(get=counting_get, now=lambda: 0.0) == "0.2.0"
+    # A day and a bit later: window elapsed, a fresh query runs.
+    later = updater._CHECK_INTERVAL_S + 1
+    assert updater.check_for_update(get=counting_get, now=lambda: float(later)) == "0.2.0"
+    assert calls["n"] == 2
+
+
+def test_check_cached_up_to_date_returns_none_without_network(monkeypatch, tmp_path):
+    # Cache says latest == running; within the window we must answer None, no call.
+    _frozen_check(monkeypatch, tmp_path, version="0.2.0")
+    updater._write_check_cache(0.0, "0.2.0")
+
+    def must_not_call(*a, **k):
+        raise AssertionError("no network call expected")
+
+    assert updater.check_for_update(get=must_not_call, now=lambda: 100.0) is None
+
+
+def test_update_check_disabled_reads_env_and_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("TN_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.delenv("TNOTES_NO_UPDATE_CHECK", raising=False)
+    assert updater.update_check_disabled() is False
+    monkeypatch.setenv("TNOTES_NO_UPDATE_CHECK", "1")
+    assert updater.update_check_disabled() is True

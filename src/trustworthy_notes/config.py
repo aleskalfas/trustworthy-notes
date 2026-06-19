@@ -128,6 +128,22 @@ def resolve_effort(flag: Optional[str]) -> str:
     return cfg_effort if cfg_effort is not None else DEFAULT_EFFORT
 
 
+def get_no_update_check() -> bool:
+    """True when the launch-time update nudge is opted out in the user config.
+
+    The env var ``TNOTES_NO_UPDATE_CHECK`` is the other opt-out; that one is read in
+    ``updater`` so it works even without a config file. This is the persisted form.
+    """
+    return bool(load().get("no_update_check"))
+
+
+def set_no_update_check(disabled: bool) -> None:
+    """Persist the update-nudge opt-out (``no_update_check`` in the user config)."""
+    cfg = load()
+    cfg["no_update_check"] = bool(disabled)
+    save(cfg)
+
+
 def auth_source() -> str:
     """Where tnotes will get Claude credentials: 'config' | 'env' | 'login' | 'none'."""
     if get_api_key():
