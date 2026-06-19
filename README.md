@@ -117,6 +117,15 @@ release and its assets over HTTPS and trusts that connection. The published
 SHA-256 is an integrity check — it guards against a truncated or corrupted
 download — not a second trust anchor.
 
+**Launch-time nudge.** When you run the Windows `tnotes.exe` and a newer release
+exists, tnotes offers a one-keypress upgrade (`tnotes vX.Y.Z is available —
+upgrade now? [Y/n]`); pressing Enter runs the same `tnotes upgrade` above, and
+declining just continues with your command. The check is cached to at most once a
+day, uses a short timeout, and fails silently — it never slows down or blocks your
+work, and never runs in scripts/CI (it only prompts at a real terminal). To turn
+it off, set `TNOTES_NO_UPDATE_CHECK=1` in your environment, or run
+`tnotes config set-no-update-check true`.
+
 On **macOS/Linux** you run from source, so there is no exe to swap; `tnotes
 upgrade` says as much and tells you to `git pull`. Re-run the bootstrap from the
 updated source.

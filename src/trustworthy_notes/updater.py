@@ -44,11 +44,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import __version__, build
+from . import __version__, build, config
 
 # Releases live here; assets are named exactly as the workflow uploads them.
 _REPO = "aleskalfas/trustworthy-notes"
@@ -60,6 +61,22 @@ _CHECKSUM_ASSET = "tnotes.exe.sha256"
 _OLD_SUFFIX = ".old"
 
 _DOWNLOAD_TIMEOUT_S = 60
+
+# The launch-time update *check* (issue #8) is a different budget from the upgrade
+# download: it runs on the hot path of every frozen invocation, so its network call
+# must be short enough that a slow or unreachable GitHub never makes the tool feel
+# sluggish. A failed/timed-out check is swallowed silently — the requested command
+# proceeds regardless — so a tight bound costs us only a missed nudge, never a hang.
+_CHECK_TIMEOUT_S = 3
+
+# The check is cached so at most one network call happens per day; within the window
+# the cached "latest seen" answer is reused with no request.
+_CHECK_INTERVAL_S = 24 * 60 * 60
+
+# Where the check state (last-check timestamp + last-seen latest version) is persisted,
+# and the env var that disables the check entirely (the config opt-out lives in config).
+_CHECK_CACHE_FILE = "update-check.json"
+_NO_CHECK_ENV = "TNOTES_NO_UPDATE_CHECK"
 
 
 class UpgradeError(Exception):
@@ -131,19 +148,20 @@ def is_newer(candidate: str, current: str) -> bool:
     return _version_tuple(candidate) > _version_tuple(current)
 
 
-def _http_get(url: str, *, accept: str | None = None) -> bytes:
+def _http_get(url: str, *, accept: str | None = None, timeout: int = _DOWNLOAD_TIMEOUT_S) -> bytes:
     """GET ``url`` over HTTPS and return the body bytes, or raise :class:`UpgradeError`.
 
     Wraps the stdlib so every network failure surfaces as one user-facing error
     type. A ``User-Agent`` is sent because the GitHub API rejects requests without
-    one.
+    one. ``timeout`` defaults to the download budget; the launch-time check passes a
+    much shorter one so a slow GitHub never stalls the hot path.
     """
     headers = {"User-Agent": f"tnotes/{__version__}"}
     if accept:
         headers["Accept"] = accept
     request = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=_DOWNLOAD_TIMEOUT_S) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read()
     except Exception as exc:  # urllib raises a zoo of types; collapse to one
         raise UpgradeError(f"could not reach {url}: {exc}") from exc
@@ -369,3 +387,109 @@ def upgrade(*, get=_http_get, log=lambda _msg: None) -> UpgradeOutcome:
         status="upgraded",
         message=f"upgraded {current} → {release.version}. Restart tnotes to use it.",
     )
+
+
+# --- launch-time update nudge (issue #8) ---
+#
+# On startup the frozen exe checks — at most once per day, with a short timeout and
+# all errors swallowed — whether a newer release exists, and if so the CLI offers a
+# one-keypress upgrade. The design contract: this must NEVER block normal use or
+# break a non-interactive run (the CI release smoke runs `tnotes.exe --help` with
+# stdout captured). So the network check here only ever *reports* what it found; the
+# CLI decides whether to prompt, and prompts only when there is an interactive TTY.
+
+
+def _check_cache_path() -> Path:
+    """Where the daily-check state lives — alongside the user config (``~/.trustworthy-notes/``)."""
+    return config.config_dir() / _CHECK_CACHE_FILE
+
+
+def _read_check_cache() -> dict:
+    """The last check's persisted state, or ``{}`` if absent/unreadable.
+
+    Best-effort by design: a missing, corrupt, or unreadable cache simply reads as
+    "no record", which forces a fresh check — never an error on the hot path.
+    """
+    path = _check_cache_path()
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_check_cache(checked_at: float, latest_version: str) -> None:
+    """Persist the check timestamp and last-seen latest version. Best-effort, silent.
+
+    A write failure (read-only home, permissions) just means the next launch checks
+    again rather than honouring the cache window — harmless, never raised.
+    """
+    try:
+        d = config.config_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / _CHECK_CACHE_FILE).write_text(
+            json.dumps({"checked_at": checked_at, "latest_version": latest_version}),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def update_check_disabled() -> bool:
+    """True when the launch-time check is opted out, via env var or config.
+
+    ``TNOTES_NO_UPDATE_CHECK=1`` (any non-empty value) or ``no_update_check: true``
+    in the user config disables the check. Reading config is best-effort — if it
+    fails we simply do not treat it as a disable.
+    """
+    if os.environ.get(_NO_CHECK_ENV):
+        return True
+    try:
+        return config.get_no_update_check()
+    except Exception:
+        return False
+
+
+def check_for_update(*, get=_http_get, now=time.time) -> str | None:
+    """Return the newer version available, or ``None``. Never raises, never blocks long.
+
+    The full contract this satisfies for the launch-time nudge:
+
+    * **Frozen-only.** A source run has no exe to swap, so the check is skipped.
+    * **Opt-out.** Honours :func:`update_check_disabled` (env var / config).
+    * **Cached — at most one network call per day.** If the persisted check is within
+      ``_CHECK_INTERVAL_S``, the last-seen latest version is reused with *no* request;
+      a still-newer cached version returns the nudge string, an up-to-date one returns
+      ``None``.
+    * **Short timeout, silent failure.** The live query uses ``_CHECK_TIMEOUT_S`` and
+      every error (network, parse, anything) is swallowed and returns ``None`` — a
+      failed check can never affect the command the user actually ran.
+
+    ``get`` and ``now`` are injected so tests exercise every branch without a network
+    call or real clock. Returns the newer version string (e.g. ``"0.2.0"``) to nudge
+    toward, or ``None`` to stay silent.
+    """
+    if not is_frozen() or update_check_disabled():
+        return None
+
+    try:
+        current = running_version()
+        cache = _read_check_cache()
+        last_checked = cache.get("checked_at")
+        if isinstance(last_checked, (int, float)) and (now() - last_checked) < _CHECK_INTERVAL_S:
+            cached_latest = cache.get("latest_version")
+            if cached_latest and is_newer(cached_latest, current):
+                return cached_latest
+            return None
+
+        # Window elapsed (or no record): one short, fail-safe network query.
+        def short_get(url, **kwargs):
+            return get(url, timeout=_CHECK_TIMEOUT_S, **kwargs)
+
+        release = fetch_latest_release(get=short_get)
+        _write_check_cache(now(), release.version)
+        if is_newer(release.version, current):
+            return release.version
+        return None
+    except Exception:
+        # Anything at all — network, parse, disk, clock — must not surface here.
+        return None
