@@ -6,7 +6,108 @@ came from. Not summarization (compression) — a faithful, verifiable
 re-representation. See `docs/METHODOLOGY.md` (the source of truth) and
 `docs/ARCHITECTURE.md` (how it's implemented).
 
+## Installation
+
+You only do this once. Pick the section for your computer.
+
+### Windows
+
+There's nothing to build and no GitHub account needed.
+
+1. Go to the project's **Releases** page on GitHub (the "Releases" link on the
+   right-hand side of the repository page) and download **`tnotes.exe`** from the
+   newest release.
+2. Move `tnotes.exe` into a folder you can write to and will remember — for
+   example `C:\Users\<you>\tnotes\`. (Avoid `C:\Program Files`; that folder needs
+   administrator rights.)
+3. Double-click it, or run it from a terminal (see Usage below).
+
+**The first time you run it, Windows may show a blue "Windows protected your PC"
+box.** This is normal and expected. It appears because the program isn't signed
+with a paid certificate yet — not because anything is wrong with it. To continue:
+click **More info**, then click **Run anyway**. Windows remembers your choice, so
+it won't ask again.
+
+### macOS / Linux
+
+There's no prebuilt download yet; you install from the source code. The one-time
+setup installs `uv` (a small tool that manages the install) if it's missing, then
+installs the `tnotes` command. From the project folder:
+
+```
+bash scripts/bootstrap.sh
+```
+
+If you use [mise](https://mise.jdx.dev), the equivalent is `mise run bootstrap`.
+Then **open a new terminal window** so the `tnotes` command is found, and
+confirm it works:
+
+```
+tnotes --help
+```
+
+(The "Quick start" and "Platform" sections further down have the finer details —
+the cross-platform core, the Windows source path, and alternatives.)
+
+## Usage
+
+### The one command you'll use most
+
+Point `tnotes` at a PDF and it does everything, then writes the finished book
+right next to the original file:
+
+```
+tnotes ./your.pdf
+```
+
+That produces **`your.tnotes.pdf`** beside `your.pdf` — a clean, readable book of
+the notes. A few options change what you get:
+
+```
+tnotes ./your.pdf -p 1-30      # only pages 1–30  →  your.p1-30.tnotes.pdf
+tnotes ./your.pdf --cite       # the anchored version: [s-N] markers + a Notes & Sources list
+tnotes ./your.pdf --force      # regenerate from scratch (normally finished work is reused)
+```
+
+By default a re-run skips work that's already done, so if it stops partway you can
+just run the same command again and it picks up where it left off. Use `--force`
+when you want it to redo everything.
+
+On **Windows** the only difference is how paths are written — use a Windows-style
+path, e.g. `tnotes C:\Users\<you>\Documents\your.pdf`.
+
+### One-time setup: connect to Claude
+
+`tnotes` uses Anthropic's Claude to read your document, so it needs an Anthropic
+API key once. Run:
+
+```
+tnotes auth set-key
+```
+
+It will ask you to paste your key (the typing stays hidden). The key is saved
+privately in your home folder — never inside the project — and `tnotes` reuses it
+from then on.
+
+By default `tnotes` uses Claude **Sonnet** (`claude-sonnet-4-6`), a sensible,
+cost-appropriate choice. If you'd rather use the premium model, set it once:
+
+```
+tnotes config set-model claude-opus-4-8
+```
+
+## Updating
+
+When a newer version is released, download the latest **`tnotes.exe`** from the
+**Releases** page again and replace your existing copy (an in-app "update
+available" prompt is planned for a later release). On macOS/Linux, re-run the
+bootstrap from an updated copy of the source.
+
 ## Quick start (one command)
+
+> This section is the **from-source** install for contributors and the
+> macOS/Linux path. Non-technical users on Windows should follow the
+> [Installation](#installation) section above (download `tnotes.exe`) instead.
 
 From the project root, run the bootstrap for your OS. It installs `uv` (if
 missing) and the `tnotes` command — that's everything needed to be functional.
