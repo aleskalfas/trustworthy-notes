@@ -162,9 +162,9 @@ def _stub_extract_capturing_pages(cli, monkeypatch, doc):
 
     def _run_extract(page, *_a, **_k):
         extracted.append(page.page_number)
-        return ({"statements": [], "evidence": [], "terms": [], "relations": []}, [])
+        return ({"statements": [], "evidence": [], "terms": [], "relations": []}, [], None)
 
-    monkeypatch.setattr(ex, "run_extract", _run_extract)
+    monkeypatch.setattr(ex, "run_extract_with_usage", _run_extract)
     monkeypatch.setattr(ex, "write_notes", lambda *a, **k: None)
     return extracted
 

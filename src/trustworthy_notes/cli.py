@@ -419,8 +419,9 @@ def extract(
     LLM call. Output is per-page notes; composing pages into a chapter is not
     built yet.
     """
-    from .extract import run_extract, write_notes
+    from .extract import run_extract_with_usage, write_notes
     from .extract_anthropic import AnthropicExtractor
+    from . import pricing
 
     # Resolve in layers: explicit flag > user config > built-in default. The flag
     # default is None, so "not passed" is distinguishable from "passed as ''"
@@ -486,11 +487,32 @@ def extract(
         n, dest, context = item
         target = by_number[n]
         try:
-            notes, dropped = run_extract(target, extractor, document=input.stem, context=context)
+            notes, dropped, usage = run_extract_with_usage(
+                target, extractor, document=input.stem, context=context
+            )
         except Exception as exc:  # one page must not abort a long batch
             return {"n": n, "ok": False, "error": str(exc)}
         write_notes(notes, dest)
-        return {"n": n, "ok": True, "notes": notes, "dropped": dropped, "dest": dest, "target": target}
+        return {
+            "n": n, "ok": True, "notes": notes, "dropped": dropped,
+            "dest": dest, "target": target, "usage": usage,
+        }
+
+    # Per-page cost estimates accumulate here; summed into a run total at the end.
+    # None entries are pages we couldn't price (unknown model / no usage reported).
+    run_costs: list[float] = []
+
+    def _cost_line(usage: object) -> str:
+        """A one-line cost estimate for a page, or the graceful unavailable note.
+
+        Always labelled an estimate with the as-of date; never prints a bare
+        ``$0`` for an unknown model (that would read as 'free', not 'unknown').
+        """
+        est = pricing.estimate_cost(model, usage) if usage is not None else None
+        if est is None:
+            return f"  cost estimate unavailable for {model!r}"
+        run_costs.append(est)
+        return f"  est. ${est:.4f} (pricing as of {pricing.PRICING_AS_OF})"
 
     def _report(res: dict) -> None:
         n = res["n"]
@@ -506,6 +528,7 @@ def extract(
             f"page {n}: statements={len(notes['statements'])} evidence={len(notes['evidence'])} "
             f"terms={len(notes['terms'])} relations={len(notes['relations'])} dropped={len(dropped)}"
         )
+        typer.echo(_cost_line(res.get("usage")))
         for d in dropped:
             typer.echo(f"  dropped {d['kind']} {d['id']}: {d['reason']}", err=True)
         if gaps:
@@ -542,6 +565,18 @@ def extract(
             res = _work(item)
             _report(res)
             results.append(res)
+
+    # Run total: sum of the pages we could price. If no page priced (unknown
+    # model, or no usage reported at all), say so rather than print $0.00.
+    priced = len([r for r in results if r["ok"] and r.get("usage") is not None])
+    if run_costs:
+        suffix = "" if priced == len(run_costs) else f" ({priced} of {len(results)} page(s) priced)"
+        typer.echo(
+            f"run total: est. ${sum(run_costs):.4f} "
+            f"(pricing as of {pricing.PRICING_AS_OF}){suffix}"
+        )
+    else:
+        typer.echo(f"run total: cost estimate unavailable for {model!r}")
 
     # Single-page interactive use: also echo the notes to stdout.
     if len(selected) == 1 and len(results) == 1 and results[0]["ok"]:

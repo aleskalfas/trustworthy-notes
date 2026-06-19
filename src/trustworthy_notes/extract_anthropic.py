@@ -318,6 +318,20 @@ class AnthropicExtractor:
         self.max_tokens = max_tokens
 
     def extract(self, page: PageText, context: Optional[dict] = None) -> dict:
+        notes, _usage = self.extract_with_usage(page, context)
+        return notes
+
+    def extract_with_usage(
+        self, page: PageText, context: Optional[dict] = None
+    ) -> tuple[dict, Optional[object]]:
+        """Like ``extract`` but also returns the final message's ``usage``.
+
+        Usage is returned out-of-band (not folded into the notes dict) so cost
+        pricing stays a caller concern and the notes payload stays clean. It is
+        returned per-call rather than stashed on ``self`` so concurrent page
+        extractions sharing one extractor don't race over it. ``None`` if the
+        provider reports no usage.
+        """
         output_config: dict = {"format": {"type": "json_schema", "schema": _INTERMEDIATE_SCHEMA}}
         if self.effort:  # some cheaper models (e.g. Haiku) reject `effort`
             output_config["effort"] = self.effort
@@ -345,4 +359,4 @@ class AnthropicExtractor:
                 f"model returned no text/JSON block (stop_reason={response.stop_reason!r}); "
                 f"likely exhausted max_tokens={self.max_tokens} while thinking — retry or raise --max-tokens"
             )
-        return assemble(json.loads(text))
+        return assemble(json.loads(text)), getattr(response, "usage", None)
