@@ -47,9 +47,28 @@ class _DefaultGroup(TyperGroup):
     the group callback would instead *swallow* the subcommand name. So we keep the
     orchestrator as a hidden ``run`` command and, when the first token isn't a known
     subcommand (i.e. it's a file path), transparently prepend ``run`` — leaving every
-    real subcommand to dispatch exactly as before. (No args at all falls through to
-    Typer's ``no_args_is_help``.)
+    real subcommand to dispatch exactly as before.
+
+    A bare invocation with *no args* normally falls through to Typer's
+    ``no_args_is_help``. But a windowless launch (a Windows double-click of the exe,
+    issue #33) has no args either, and dumping ``--help`` there is the wrong screen —
+    so we intercept that one case in :meth:`parse_args` and show the onboarding
+    screen instead. Every other no-args run is unchanged.
     """
+
+    def parse_args(self, ctx, args):
+        # Only a *windowless* bare launch (double-click, no PDF, no subcommand) is
+        # diverted to onboarding; a normal terminal `tnotes` with no args still gets
+        # Typer's help. is_windowless_launch() is False off Windows and on any
+        # ambiguity, so this branch is dead weight in a terminal/pipe/CI run.
+        if not args:
+            from . import winlaunch
+
+            if winlaunch.is_windowless_launch():
+                winlaunch.onboard()
+                winlaunch.pause()
+                raise typer.Exit()
+        return super().parse_args(ctx, args)
 
     def resolve_command(self, ctx, args):
         try:
@@ -192,7 +211,17 @@ def run(
     already finished, and writes the finished book beside the source as
     <stem>[.pRANGE].tnotes.pdf (clean prose by default; --cite for the anchored copy).
     """
-    from . import pipeline
+    from . import pipeline, winlaunch
+
+    # Windowless launch (a PDF dragged onto the exe, issue #33): a bare console that
+    # closes on exit. Prompt for + save the key on first run before the auth gate,
+    # and PAUSE at every exit so the user can read the result or the error instead of
+    # watching the window flash shut. All of this is a no-op in a terminal/pipe/CI run
+    # (is_windowless_launch() is False there), so the existing behaviour is untouched.
+    windowless = winlaunch.is_windowless_launch()
+    if windowless and not winlaunch.ensure_api_key():
+        winlaunch.pause()
+        raise typer.Exit(1)
 
     if config.auth_source() == "none":
         typer.echo(
@@ -200,6 +229,7 @@ def run(
             "or `tnotes auth login` (your account) first.",
             err=True,
         )
+        winlaunch.pause()
         raise typer.Exit(1)
 
     def log(msg: str) -> None:
@@ -211,8 +241,14 @@ def run(
         )
     except ValueError as exc:
         typer.echo(f"tnotes: {exc}", err=True)
+        winlaunch.pause()
         raise typer.Exit(1)
-    typer.echo(str(book_pdf))
+    if windowless:
+        # A friendlier line than the bare path for the double-click/drag user.
+        typer.echo(f"\nDone — wrote {book_pdf.name} in {book_pdf.parent}.")
+        winlaunch.pause()
+    else:
+        typer.echo(str(book_pdf))
 
 
 auth_app = typer.Typer(help="Connect tnotes to Claude (so you don't touch API keys or env vars).")
