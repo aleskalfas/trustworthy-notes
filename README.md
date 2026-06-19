@@ -12,21 +12,54 @@ You only do this once. Pick the section for your computer.
 
 ### Windows
 
-There's nothing to build and no GitHub account needed.
+No terminal, no build, no GitHub account. You download one file, then you work by
+double-clicking and dragging — there is nothing to type.
 
-1. Go to the project's **Releases** page on GitHub (the "Releases" link on the
-   right-hand side of the repository page) and download **`tnotes.exe`** from the
-   newest release.
-2. Move `tnotes.exe` into a folder you can write to and will remember — for
-   example `C:\Users\<you>\tnotes\`. (Avoid `C:\Program Files`; that folder needs
-   administrator rights.)
-3. Double-click it, or run it from a terminal (see Usage below).
+**1. Download.** Go to the project's **Releases** page on GitHub (the "Releases"
+link on the right-hand side of the repository page) and download **`tnotes.exe`**
+from the newest release. Move it into a folder you can write to and will
+remember — for example `C:\Users\<you>\tnotes\`. (Avoid `C:\Program Files`; that
+folder needs administrator rights.)
 
-**The first time you run it, Windows may show a blue "Windows protected your PC"
-box.** This is normal and expected. It appears because the program isn't signed
-with a paid certificate yet — not because anything is wrong with it. To continue:
-click **More info**, then click **Run anyway**. Windows remembers your choice, so
-it won't ask again.
+**2. Double-click it first.** The first time, Windows may show a blue **"Windows
+protected your PC"** box. This is normal — it appears only because the program
+isn't signed with a paid certificate yet, not because anything is wrong. Click
+**More info**, then **Run anyway**. Windows remembers your choice, so it asks just
+this once.
+
+A small console window opens. On the very first run it asks for your Anthropic API
+key — **paste it (right-click in the window to paste) and press Enter**. The key
+is saved privately in your home folder, so you only do this once. It then says
+*"Setup complete. Drag a PDF file onto this tnotes icon to make notes."* The
+window waits for a keypress before closing, so nothing flashes past.
+
+> Don't have a key yet? Create one at
+> <https://console.anthropic.com/settings/keys>.
+
+**3. Drag a PDF onto the icon.** From then on, just drag any PDF file onto
+`tnotes.exe` (or onto a shortcut to it). A console window opens, the work runs
+with progress shown, and when it finishes it tells you where the book landed:
+
+> *Done — wrote `your.tnotes.pdf` in `C:\Users\<you>\Documents`.*
+
+The finished book is written **right next to your PDF**, named after it
+(`your.pdf` → `your.tnotes.pdf`). The window stays open until you press a key, so
+you can always read the result — or, if something went wrong, the error.
+
+**For power users — a real terminal.** Everything above is the no-terminal path.
+If you'd rather use the command line (for page ranges, `--cite`, etc.), open a
+terminal *in the folder*: hold **Shift**, right-click the folder, and choose
+**"Open PowerShell window here"**. Then run `tnotes` with its options exactly as
+in the [Usage](#usage) section — e.g. `tnotes .\your.pdf -p 1-30`. Run from a
+terminal this way, tnotes behaves like any normal command: no key prompt unless
+you ask for one, and no pause on exit.
+
+> **About PATH.** Because `tnotes.exe` is a single file you placed yourself rather
+> than an installer, the bare word `tnotes` only works from a terminal opened in
+> its folder (as above). To run it from anywhere, either add its folder to your
+> PATH, or call it by full path
+> (`C:\Users\<you>\tnotes\tnotes.exe`). For the double-click / drag workflow none
+> of this matters — Windows finds the exe by where you click.
 
 ### macOS / Linux
 
