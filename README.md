@@ -255,11 +255,13 @@ spend cap and rotate if exposed.)
 
 `tnotes auth login` (use your Anthropic account instead of a key) relies on the
 external `ant` helper and is most convenient on macOS; on Windows/Linux prefer
-`tnotes auth set-key`. *(Windows is supported by design but not yet verified on a
-Windows machine — please report issues.)*
+`tnotes auth set-key`. *(Windows ships as a prebuilt `tnotes.exe` on the Releases
+page — see the Installation section above; the release build is verified by CI.)*
 
 ## Status
 
-Wave 0 ingest is real (column-aware reading, running-header stripping, layout
-classification + routing for text/table/figure/blank). The note-extraction
-waves are under active design — see the docs above.
+All pipeline waves are implemented — ingest (column-aware reading, running-header
+stripping, layout classification + routing for text/table/figure/blank) → extract
+→ compose → validate → export → book. v0.1.0 ships the one-command `tnotes <pdf>`
+flow and a prebuilt Windows `tnotes.exe` on the Releases page. See the docs above
+for the methodology and architecture.
