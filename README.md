@@ -98,10 +98,28 @@ tnotes config set-model claude-opus-4-8
 
 ## Updating
 
-When a newer version is released, download the latest **`tnotes.exe`** from the
-**Releases** page again and replace your existing copy (an in-app "update
-available" prompt is planned for a later release). On macOS/Linux, re-run the
-bootstrap from an updated copy of the source.
+On **Windows**, run:
+
+```
+tnotes upgrade
+```
+
+It checks the **Releases** page for a newer version and, if there is one,
+downloads the latest `tnotes.exe`, verifies its published SHA-256 checksum, and
+replaces your copy in place. The swap is fail-safe — an interrupted or failed
+upgrade always leaves your current working copy untouched — and the download is
+verified to launch before it is installed. If you are already up to date it says
+so and does nothing. (You can still update by hand: download `tnotes.exe` from the
+Releases page and replace your copy.)
+
+**Trust model.** The trust root is GitHub over TLS: `tnotes upgrade` fetches the
+release and its assets over HTTPS and trusts that connection. The published
+SHA-256 is an integrity check — it guards against a truncated or corrupted
+download — not a second trust anchor.
+
+On **macOS/Linux** you run from source, so there is no exe to swap; `tnotes
+upgrade` says as much and tells you to `git pull`. Re-run the bootstrap from the
+updated source.
 
 ## Quick start (one command)
 
