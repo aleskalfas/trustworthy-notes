@@ -6,12 +6,38 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import typer
 from typer.core import TyperGroup
 
 from . import config, ingest, workspace
+
+
+def _force_utf8_streams() -> None:
+    """Make stdout/stderr encode UTF-8, so non-ASCII output never crashes.
+
+    Help text and reports contain non-ASCII (e.g. the ``→`` arrow). On Windows
+    when stdout isn't UTF-8 — redirected/captured output, or a legacy cp1252
+    console — Python's default codec raises UnicodeEncodeError trying to encode
+    those characters, taking the whole process down (issue #26). Reconfiguring to
+    UTF-8 up front avoids that. It runs for both entry points because both import
+    this module: the ``tnotes`` console script (``cli:app``) and the frozen exe /
+    ``python -m trustworthy_notes`` (via ``__main__`` importing ``cli``).
+
+    Harmless on macOS/Linux (already UTF-8). Guarded so it's a no-op where
+    ``reconfigure`` is unavailable (e.g. an already-wrapped stream, or pytest's
+    captured streams).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
+
+_force_utf8_streams()
 
 
 class _DefaultGroup(TyperGroup):
