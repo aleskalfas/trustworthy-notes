@@ -73,8 +73,47 @@ The mechanism is a generated module, not a hand-edited constant:
 Run the script immediately before the freeze (the one-liner under "Build it" does
 this). Skip it and the build still succeeds but ships `0.1.0+dev`.
 
-> **For CI (#6):** the override point is the `TN_BUILD_STAMP` env var. The CI build
-> job should set it (e.g. to the full release SHA or a tag) and then run the same
-> freeze command; everything downstream — `build.py`, the spec, the cache key —
-> already consumes it. No further wiring is needed in CI beyond exporting that var
-> (or relying on the auto-detected git SHA, which also works in CI checkouts).
+## Releasing the Windows build (CI on a version tag)
+
+The local build above produces a `dist/tnotes` for the machine you run it on. The
+distributable **Windows** `tnotes.exe` is built and published by CI — a Windows
+runner is the only way to produce a Windows exe — so a release is a tag push, not
+a local build. The workflow is `.github/workflows/release.yml`.
+
+To cut a release:
+
+1. **Bump the version** in both places that carry it: the `__version__` constant in
+   `src/trustworthy_notes/__init__.py` and the `version` in `pyproject.toml`. Keep
+   them in lockstep — `build_identity()` reads `__version__`, and the release tag
+   should match.
+2. **Commit** the bump on `main`.
+3. **Tag and push** the matching `vX.Y.Z` tag — this is what triggers the workflow:
+
+   `git tag vX.Y.Z && git push origin vX.Y.Z`
+
+4. CI (on `windows-latest`) bakes the build stamp, freezes `tnotes.exe`, smoke-tests
+   it, and **publishes it to a GitHub Release** for that tag.
+
+The **end user** downloads `tnotes.exe` from that release on the repo's Releases page
+and runs it directly — no Python install and no account needed.
+
+### What the workflow does, and why each step matters
+
+- **Bakes the stamp before freezing.** It runs `scripts/stamp_build.py` with
+  `TN_BUILD_STAMP` set to the release commit (`git-<sha>`), so the frozen exe carries
+  a distinct cache identity rather than `0.1.0+dev`. This is the `TN_BUILD_STAMP`
+  override point the stamp script and `build.py` already consume — no other wiring.
+- **Asserts the identity is not `+dev`.** Immediately after baking it imports
+  `trustworthy_notes.build.build_identity()` and fails the job if the result ends in
+  `+dev`. That guards against a future spec change that drops the
+  `trustworthy_notes._build_stamp` hidden import: instead of silently shipping a build
+  whose frozen cache key collides with every other same-version build, the release
+  fails loudly.
+- **Smoke-tests the exe.** It runs `tnotes.exe --help` (the freeze loads and the entry
+  point works) and then renders a tiny Markdown document to PDF through `tnotes book`,
+  which exercises the **bundled Charis font** — the freeze-only resource risk from the
+  packaging notes above. If either fails, the release does not publish.
+
+CI uses the auto-detected/overridden git SHA, so it needs no secrets beyond the
+default `GITHUB_TOKEN` (the workflow grants it `contents: write` to create the
+Release).
