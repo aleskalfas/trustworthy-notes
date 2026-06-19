@@ -12,7 +12,7 @@ from pathlib import Path
 import typer
 from typer.core import TyperGroup
 
-from . import config, ingest, workspace
+from . import __version__, config, ingest, workspace
 
 
 def _force_utf8_streams() -> None:
@@ -70,6 +70,39 @@ app = typer.Typer(
     "Already-finished stages are skipped (--force to redo). Use the subcommands below "
     "for per-stage control. Connect to Claude once with `tnotes auth set-key`.",
 )
+
+
+def _version_callback(value: bool) -> None:
+    """Print the version and exit — the ``tnotes --version`` flag.
+
+    Beyond being useful on its own, this is the gate `tnotes upgrade` relies on:
+    it runs a freshly downloaded exe with ``--version`` to confirm it is a
+    launchable tnotes before swapping it in (see updater.verify_launchable).
+    """
+    if value:
+        typer.echo(__version__)
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        None, "--version", callback=_version_callback, is_eager=True,
+        help="Show the tnotes version and exit.",
+    ),
+) -> None:
+    """Sweep a stale upgrade leftover, then dispatch the subcommand.
+
+    `tnotes upgrade` renames the running exe to tnotes.exe.old (Windows won't let a
+    running exe be deleted); by the next launch that process has exited, so this is
+    where the leftover gets removed. Cheap and silent on every other invocation.
+    """
+    from . import updater
+
+    # Only a frozen build has an exe that could have a .old leftover; in a source
+    # run sys.executable is the interpreter, so there is nothing of ours to sweep.
+    if updater.is_frozen():
+        updater.cleanup_stale()
 
 
 @app.command(name="run", hidden=True)
@@ -1212,6 +1245,31 @@ def chapters(
 
     fp = report.inputs_fingerprint(input, notes_dir)
     report.emit(workspace.compose_stage_dir(notes_dir, "chapter-map") / "chapters.txt", fp, force, render, label="tnotes chapters")
+
+
+@app.command()
+def upgrade():
+    """Update the installed tnotes.exe in place from the latest GitHub Release.
+
+    Checks the latest release; if it is newer than the running build, downloads its
+    tnotes.exe, verifies the published SHA-256 checksum, confirms the download is
+    launchable, and swaps it into place fail-safely (a failed or interrupted upgrade
+    always leaves the current working exe untouched). If you are already up to date
+    it says so and does nothing; from a source checkout it explains that upgrade
+    applies to the packaged exe only (use `git pull`). Trust model: GitHub over TLS
+    is the trust root; the SHA-256 guards against a corrupted download.
+    """
+    from . import updater
+
+    def log(msg: str) -> None:
+        typer.echo(msg, err=True)
+
+    try:
+        outcome = updater.upgrade(log=log)
+    except updater.UpgradeError as exc:
+        typer.echo(f"tnotes upgrade: {exc}", err=True)
+        raise typer.Exit(1)
+    typer.echo(outcome.message)
 
 
 if __name__ == "__main__":

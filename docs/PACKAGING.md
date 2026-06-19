@@ -117,3 +117,61 @@ and runs it directly — no Python install and no account needed.
 CI uses the auto-detected/overridden git SHA, so it needs no secrets beyond the
 default `GITHUB_TOKEN` (the workflow grants it `contents: write` to create the
 Release).
+
+## Self-update: `tnotes upgrade` (issue #7)
+
+A user who downloaded `tnotes.exe` once should not have to hunt the Releases page
+to stay current. `tnotes upgrade` updates the installed exe in place from the
+latest release. The logic lives in `src/trustworthy_notes/updater.py`, imported
+only by `cli` — the pipeline never reaches it, so a self-update path can never
+drag the extraction machinery along.
+
+### The published checksum
+
+The release workflow computes `tnotes.exe`'s SHA-256 and uploads it beside the exe
+as `tnotes.exe.sha256` (in `sha256sum` form, `<digest>  tnotes.exe`). `tnotes
+upgrade` downloads both and refuses to install unless the bytes match.
+
+**Trust model.** The trust root is **GitHub over TLS** — the updater fetches the
+release metadata from `api.github.com` and the assets from `github.com` over
+HTTPS, and trusts the validated certificate chain. The SHA-256 is **not** a second
+trust anchor (an attacker who could forge the download could forge the checksum
+too); it guards against the failure TLS does not catch — a **truncated or
+corrupted download**.
+
+### The fail-safe in-place swap
+
+Windows will not let a running process overwrite or delete its own `.exe`, but it
+*will* let it be renamed. The swap therefore runs in this order, and only the last
+two steps touch the installed file:
+
+1. Query `releases/latest`; if it is not newer than the running version, stop and
+   report up-to-date (nothing is downloaded-and-swapped needlessly).
+2. Download the new exe and its `.sha256`; **verify the checksum**.
+3. Stage the new exe in a temp dir *beside* the target (so the final move is
+   same-filesystem and `os.replace` stays atomic).
+4. **Verify it is launchable** — run the staged exe with `--version` and require a
+   clean exit. A download that hashes correctly but cannot launch (wrong arch, an
+   OS that refuses it) is rejected here, *before* the live exe is touched.
+5. Rename the running `tnotes.exe` → `tnotes.exe.old` (allowed while running),
+   then move the verified exe into the freed name. If the move fails, the `.old` is
+   rolled back so the user keeps exactly the working exe they had.
+6. Leave `tnotes.exe.old` behind — the old exe is still the running process and
+   still locked, so it cannot be deleted now. `cli`'s startup callback calls
+   `updater.cleanup_stale()` on the *next* launch, by when that process has exited
+   and the file is unlocked.
+
+Every failure up to and including step 4 raises before the swap, so an interrupted
+or failed upgrade **always** leaves the current working exe in place.
+
+From a **source checkout** (`sys.frozen` false) there is no exe to swap; `tnotes
+upgrade` explains that and points to `git pull`, exiting cleanly.
+
+### Validation caveat
+
+The updater is authored and unit-tested on macOS, where the running-exe swap
+cannot be exercised — the file-locking semantics that make the rename dance
+necessary are Windows-only. The tests mock the GitHub API and download and exercise
+the rename/move/cleanup/rollback against temp files (`tests/test_updater.py`,
+`tests/test_cli_upgrade.py`). **The first real validation of the live swap is
+running `tnotes upgrade` on Windows against a published release.**
