@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from jsonschema import Draft202012Validator
 
-from trustworthy_notes.extract import run_extract
+from trustworthy_notes.extract import run_extract, run_extract_with_usage
 from trustworthy_notes.extract_anthropic import _INTERMEDIATE_SCHEMA, AnthropicExtractor, assemble
 from trustworthy_notes.models import PageText
 from trustworthy_notes.validation import validate_structure
@@ -21,10 +21,11 @@ class _FakeClient:
     """Stands in for anthropic.Anthropic — replays a fixed JSON payload over the
     streaming API (messages.stream(...).get_final_message())."""
 
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict, usage: object = None):
         message = SimpleNamespace(
             content=[SimpleNamespace(type="text", text=json.dumps(payload))],
             stop_reason="end_turn",
+            usage=usage,
         )
 
         class _FakeStream:
@@ -121,3 +122,24 @@ def test_extractor_hallucinated_quote_is_gated_out():
     assert notes["statements"] == []  # ungrounded statement dropped
     assert any(d["kind"] == "evidence" for d in dropped)
     assert not validate_structure(notes)
+
+
+def test_run_extract_with_usage_surfaces_the_final_message_usage():
+    page = PageText(page_index=0, page_number=1, text="The cat sat.", width=1.0, height=1.0)
+    payload = {
+        "statements": [
+            {
+                "key": "s1",
+                "type": "claim",
+                "text": "a cat sat",
+                "evidence": [{"excerpt": "cat sat", "source": "body"}],
+            }
+        ],
+    }
+    usage = SimpleNamespace(input_tokens=120, output_tokens=45)
+    extractor = AnthropicExtractor(client=_FakeClient(payload, usage=usage))
+    notes, dropped, got = run_extract_with_usage(page, extractor, document="d")
+
+    assert notes["statements"][0]["text"] == "a cat sat"
+    assert got is usage  # surfaced out-of-band, not folded into the notes
+

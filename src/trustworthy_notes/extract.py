@@ -82,16 +82,40 @@ def anchor_gate(notes: dict, page: PageText) -> tuple[dict, list[dict]]:
     return cleaned, dropped
 
 
-def run_extract(
-    page: PageText, extractor: Extractor, document: str, context: Optional[dict] = None
-) -> tuple[dict, list[dict]]:
-    """Extract a page's notes, stamp the authoritative source, and anchor-gate."""
-    raw = extractor.extract(page, context)
+def _finalize(raw: dict, page: PageText, document: str) -> tuple[dict, list[dict]]:
+    """Stamp the authoritative source onto a raw notes dict, then anchor-gate."""
     source = {"document": document, "scope": "page", "page_index": page.page_index}
     if page.page_label is not None:
         source["page_label"] = page.page_label
     raw = {**raw, "schema_version": 1, "source": source}
     return anchor_gate(raw, page)
+
+
+def run_extract(
+    page: PageText, extractor: Extractor, document: str, context: Optional[dict] = None
+) -> tuple[dict, list[dict]]:
+    """Extract a page's notes, stamp the authoritative source, and anchor-gate."""
+    raw = extractor.extract(page, context)
+    return _finalize(raw, page, document)
+
+
+def run_extract_with_usage(
+    page: PageText, extractor: Extractor, document: str, context: Optional[dict] = None
+) -> tuple[dict, list[dict], Optional[object]]:
+    """Like ``run_extract`` but also returns the provider's token ``usage``.
+
+    Uses the extractor's ``extract_with_usage`` when available (the Anthropic
+    adapter), falling back to ``extract`` (usage ``None``) for any extractor that
+    only implements the base protocol. The usage object is what
+    ``pricing.estimate_cost`` consumes.
+    """
+    fn = getattr(extractor, "extract_with_usage", None)
+    if fn is not None:
+        raw, usage = fn(page, context)
+    else:
+        raw, usage = extractor.extract(page, context), None
+    notes, dropped = _finalize(raw, page, document)
+    return notes, dropped, usage
 
 
 def write_notes(notes: dict, path: str | Path) -> None:

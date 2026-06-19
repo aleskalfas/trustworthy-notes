@@ -232,6 +232,26 @@ tnotes extract INPUT.pdf --pages 14 -m claude-haiku-4-5 -e ''   # a flag overrid
 These defaults are stored in the same `~/.trustworthy-notes/config.yaml` as your
 API key (see Platform below); setting them never touches the saved key.
 
+### Cost estimates
+
+After each page, `tnotes extract` prints an **estimated** USD cost, then a
+run-total line, computed from Claude's reported token usage times a built-in
+per-model price table:
+
+```
+page 14: statements=9 evidence=12 terms=2 relations=4 dropped=1
+  est. $0.0123 (pricing as of 2026-06-04)
+…
+run total: est. $0.0461 (pricing as of 2026-06-04)
+```
+
+This is a convenience figure only. The rates are hardcoded constants stamped with
+an "as of" date (there is no Anthropic pricing API), so they can drift — the real
+guardrail is the **spend cap on your API key** (see Platform below), not this
+number. If you run a model that isn't in the table, the line reads
+`cost estimate unavailable for '<model>'` rather than a misleading `$0`. The
+priced models are `claude-sonnet-4-6`, `claude-opus-4-8`, and `claude-haiku-4-5`.
+
 ### Where generated files go
 
 By default every artifact for a document lands in a **folder beside the PDF,
