@@ -85,8 +85,21 @@ jobs:
           }
           Write-Host "rendered $work\fixture.tnotes.pdf"
 
-      - name: Publish tnotes.exe to the GitHub Release
+      - name: Publish a SHA-256 checksum beside the exe
+        # `tnotes upgrade` (issue #7) downloads tnotes.exe and this .sha256, and
+        # refuses to install unless the bytes match — guarding against a corrupted
+        # download. (TLS is the trust root; this is an integrity check, not a second
+        # trust anchor.) sha256sum form `<digest>  <name>`; the updater parses it.
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\tnotes.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  tnotes.exe" | Set-Content -NoNewline -Encoding ascii dist\tnotes.exe.sha256
+          Write-Host "tnotes.exe sha256: $hash"
+
+      - name: Publish tnotes.exe (+ checksum) to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/tnotes.exe
+          files: |
+            dist/tnotes.exe
+            dist/tnotes.exe.sha256
           fail_on_unmatched_files: true
