@@ -22,10 +22,45 @@ scoped key with a spend cap and rotate it if it's ever exposed.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
 import yaml
+
+# A GitHub repo reference we are willing to reduce to ``owner/name`` so a pasted
+# browser/clone URL is never stored verbatim (a stored URL produces a malformed
+# API path and a 404 on every call). Matches the host with the common prefixes
+# (https/http, optional ``www.``, the ``git@`` SCP form); a trailing ``.git``
+# and/or ``/`` are trimmed separately so the one expression stays readable.
+_GITHUB_URL_RE = re.compile(
+    r"^(?:https?://(?:www\.)?github\.com/|git@github\.com:)(?P<path>.+)$",
+    re.IGNORECASE,
+)
+
+
+def normalise_feedback_repo(raw: str) -> str:
+    """Reduce a pasted repo reference to the ``owner/name`` form the API expects.
+
+    A bare ``owner/name`` passes through unchanged. A full GitHub URL — the browser
+    address ``https://github.com/owner/name``, the ``git@github.com:owner/name``
+    clone form, with or without a trailing ``.git`` or ``/`` — is stripped back to
+    ``owner/name``. Forgiving by design: anything it doesn't recognise as a URL is
+    returned trimmed and otherwise untouched, so a typo still reaches the connection
+    check (which decides whether the value works) rather than being silently rewritten.
+
+    Canonicalising here, at the storage boundary, means no entry point — the
+    ``config set-feedback-repo`` command, a maintainer pre-seed, or the onboarding
+    default — can persist a URL that later 404s.
+    """
+    value = raw.strip()
+    match = _GITHUB_URL_RE.match(value)
+    if match:
+        value = match.group("path")
+    value = value.rstrip("/")
+    if value.endswith(".git"):
+        value = value[: -len(".git")]
+    return value.strip("/")
 
 # Built-in defaults used when neither a flag nor the user config supplies a value.
 # Sonnet is the cost-appropriate default model; `low` keeps adaptive thinking from
@@ -138,8 +173,14 @@ def get_feedback_repo() -> Optional[str]:
 
 
 def set_feedback_repo(repo: str) -> None:
+    """Store the feedback repo, normalised to ``owner/name``.
+
+    Normalising at this boundary means a pasted URL (from the config command, a
+    maintainer pre-seed, or the onboarding default) can never be persisted verbatim
+    and later 404 — see :func:`normalise_feedback_repo`.
+    """
     cfg = load()
-    cfg["feedback_repo"] = repo
+    cfg["feedback_repo"] = normalise_feedback_repo(repo)
     save(cfg)
 
 
