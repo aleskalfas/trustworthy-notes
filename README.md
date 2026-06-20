@@ -56,6 +56,15 @@ The finished book is written **right next to your PDF**, named after it
 (`your.pdf` → `your.tnotes.pdf`). The window stays open until you press a key, so
 you can always read the result — or, if something went wrong, the error.
 
+**4. Send feedback when something looks wrong.** If you added the **"Send
+Feedback"** shortcut during setup, **drag the problem PDF onto it** to report
+against that document, or **double-click it** (no PDF) for a general report.
+Either way a window opens and guides you: it asks for your key the first time,
+then asks you to describe the problem, and — because a report can include
+excerpts of your document — shows you exactly what would be uploaded and waits
+for your **yes** before anything leaves your machine. The window stays open until
+you press a key, so nothing flashes past.
+
 **For power users — a real terminal.** Everything above is the no-terminal path.
 If you'd rather use the command line (for page ranges, `--cite`, etc.), open a
 terminal *in the folder*: hold **Shift**, right-click the folder, and choose
@@ -331,6 +340,13 @@ maintainer — no GitHub account needed:
 ```
 tnotes feedback "page 12 export looks wrong" --doc data/Foo.pdf --pages 12
 ```
+
+The single positional is smart about what you hand it: a value that is an
+**existing file** is taken as the document (`tnotes feedback data/Foo.pdf`), and
+anything else is your **message** (`tnotes feedback "the export crashed"`). That
+is what lets the Windows "Send Feedback" shortcut work — a dragged PDF arrives as
+exactly that positional. Use `-m/--message` and `--doc` to be explicit; if both a
+dropped file and `--doc` are given they must be the same document.
 
 It captures diagnostics (tool version, OS, your message), bundles the referenced
 document's `.tnotes` notes for the given page range (for reproduction), and uses

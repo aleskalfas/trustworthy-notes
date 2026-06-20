@@ -1443,7 +1443,15 @@ def chapters(
 
 @app.command()
 def feedback(
-    message: str = typer.Argument(None, help="What went wrong. Prompted for if omitted."),
+    target: str = typer.Argument(
+        None,
+        help="Either a PDF path the problem is about, or your message text. A value that "
+        "is an existing file is treated as the document (same as --doc); anything else "
+        "is the message. A Windows 'Send Feedback' shortcut delivers a dragged PDF here.",
+    ),
+    message: str = typer.Option(
+        None, "--message", "-m", help="Your message. Overrides a message given positionally."
+    ),
     doc: Path = typer.Option(
         None, "--doc", exists=True, dir_okay=False,
         help="The PDF the problem is about — its .tnotes notes + page range are bundled for reproduction.",
@@ -1462,13 +1470,66 @@ def feedback(
     you decline the upload), it saves everything to a local file so feedback is never
     lost. The bundle carries verbatim source excerpts, so you're shown exactly what
     will be uploaded and asked before anything leaves your machine.
+
+    Drag a PDF onto the "Send Feedback" desktop shortcut to report against that
+    document; double-click it (no PDF) for a general report. Either way you're
+    guided through the rest with no terminal needed.
     """
-    from . import feedback as feedbackmod
+    from . import feedback as feedbackmod, onboarding, winlaunch
+
+    # Disambiguate the single positional: a value that resolves to an existing file
+    # is the document (a dragged PDF arrives here as a bare argv token); anything
+    # else is the message text. --doc and --message remain the explicit forms.
+    positional_doc: Path | None = None
+    positional_message: str | None = None
+    if target:
+        candidate = Path(target)
+        if candidate.is_file():
+            positional_doc = candidate
+        else:
+            positional_message = target
+
+    # A positional PDF and an explicit --doc must agree; otherwise the user has
+    # pointed at two different documents and we shouldn't guess which.
+    if positional_doc is not None and doc is not None and positional_doc.resolve() != doc.resolve():
+        typer.echo(
+            f"feedback: the dropped file ({positional_doc}) and --doc ({doc}) are "
+            f"different documents — pass only one.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    doc = doc or positional_doc
+    # An explicit --message wins over a positional message (the flag is the explicit ask).
+    message = message or positional_message
+
+    # Windowless launch (the "Send Feedback" shortcut: double-click or PDF drag,
+    # issues #39/#40) — a bare console that closes on exit. Ensure the key before
+    # anything, guide the user for the message a flag couldn't carry, and PAUSE at
+    # every return so the result/error stays readable. All a no-op in a terminal/
+    # pipe/CI run (is_windowless_launch() is False there), so existing usage is
+    # untouched.
+    windowless = winlaunch.is_windowless_launch()
+    if windowless:
+        if not onboarding.ensure_api_key():
+            winlaunch.pause()
+            raise typer.Exit(1)
+        if doc is not None:
+            typer.echo(f"\nReporting a problem with: {doc.name}")
+        else:
+            typer.echo("\nReporting a general problem (no document attached).")
+        try:
+            message = input("\nDescribe the problem, then press Enter:\n").strip()
+        except (EOFError, KeyboardInterrupt):
+            message = ""
 
     if not message:
-        message = typer.prompt("What went wrong?").strip()
+        # In a terminal, prompt; in windowless mode the input above already ran, so
+        # an empty answer is a clean nothing-to-report exit (still paused).
+        if not windowless:
+            message = typer.prompt("What went wrong?").strip()
     if not message:
         typer.echo("No message entered — nothing to report.", err=True)
+        winlaunch.pause()
         raise typer.Exit(1)
 
     # Reporter name: asked once, then remembered (every report is tagged with it,
@@ -1511,6 +1572,7 @@ def feedback(
         typer.echo(f"Saved your report to {outcome.location}")
         if outcome.reason:
             typer.echo(f"({outcome.reason} — send that file to the maintainer)", err=True)
+    winlaunch.pause()
 
 
 @app.command()
