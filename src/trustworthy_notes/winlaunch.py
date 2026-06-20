@@ -1,4 +1,4 @@
-"""Make the Windows ``tnotes.exe`` usable with no terminal (issue #33).
+"""Windows-only launch *mechanics* for the windowless ``tnotes.exe`` (issues #33, #39).
 
 A non-technical Windows user double-clicks the exe, or drags a PDF onto it. In
 both cases Windows opens a fresh console window that the exe *owns* — and the
@@ -6,34 +6,38 @@ instant the process returns, that window closes. Without help the user sees the
 help text (or a result) flash past and vanish, with no chance to read it, paste a
 key, or learn what to do next.
 
-This module supplies the three pieces that fix that, and nothing the pipeline
-needs:
+This module is the thin platform-glue seam — the pieces that touch Windows-only
+APIs and nothing the pipeline needs:
 
 * :func:`is_windowless_launch` — detect "we own our own console" (double-click /
-  drag), fail-safe to ``False`` everywhere else;
+  drag), fail-safe to ``False`` everywhere else (Windows-only ``ctypes``);
 * :func:`pause` — hold the window open until a keypress, but only when windowless;
-* :func:`onboard` / :func:`ensure_api_key` — the first-run key prompt and the
-  friendly "drag a PDF onto me" screen.
+* :func:`create_feedback_shortcut` — drop a "Send Feedback" ``.lnk`` on the
+  desktop via a PowerShell shell-out (ADR-005), a no-op off Windows.
+
+The first-run *flow* that calls these — the welcome screen, the key prompt, the
+optional feedback setup — lives in :mod:`onboarding`, deliberately kept separate
+so this module stays pure Windows mechanics.
 
 It is deliberately import-light and the pipeline never imports it: the detection
-relies on Windows-only ``ctypes`` calls that must degrade to a plain "no" off
+and shortcut code rely on Windows-only calls that must degrade to a plain "no" off
 Windows, and keeping it isolated means a source/CI run never pays for or trips
-over any of it. Everything here is unit-testable by stubbing the detector and
-``input`` — see the macOS caveat below.
+over any of it. Everything here is unit-testable by stubbing the platform check,
+``ctypes``, ``input``, and ``subprocess`` — see the macOS caveat below.
 
 **macOS / CI caveat.** The author develops on macOS and cannot exercise a real
-Windows double-click, drag-and-drop, or console-ownership query. The branching
-and the fail-safe are covered by tests that stub the detector and ``input``; the
-*first real validation of the windowless path is a Windows run* of the packaged
-exe.
+Windows double-click, drag-and-drop, console-ownership query, or ``.lnk``
+creation. The branching and the fail-safe are covered by tests that stub those;
+the *first real validation of the windowless path is a Windows run* of the
+packaged exe.
 """
 
 from __future__ import annotations
 
 import platform
+import subprocess
 import sys
-
-from . import config
+from pathlib import Path
 
 
 def is_windowless_launch() -> bool:
@@ -101,54 +105,50 @@ def pause(prompt: str = "\nPress Enter to close this window…") -> None:
         pass
 
 
-def ensure_api_key() -> bool:
-    """Make sure a key is configured for a windowless run; prompt + save if not.
+def create_feedback_shortcut() -> bool:
+    """Create a "Send Feedback" ``.lnk`` on the user's desktop — Windows only (ADR-005).
 
-    Returns ``True`` when tnotes can authenticate to Claude (a key was already
-    present, or one was just pasted and saved), ``False`` when the user gave nothing
-    and we cannot proceed. Honours any existing auth source — env var or account
-    login count as configured, exactly as the rest of the CLI treats them, so we
-    never nag a user who is already set up another way.
+    Returns ``True`` when a shortcut was created, ``False`` on any other outcome:
+    off Windows it is a **no-op** that returns ``False`` (mirroring how
+    :func:`is_windowless_launch` gates its ctypes call behind a platform check), and
+    a failed shell-out is swallowed and returns ``False`` so onboarding never
+    crashes over a cosmetic extra. The *consent* gate lives in
+    :func:`onboarding.offer_feedback_shortcut`; this is just the platform glue.
 
-    The prompt is plain ``input`` (not hidden): a double-click user pastes the key
-    with a right-click, and a hidden field gives no feedback that the paste landed,
-    which reads as "frozen". The key lands in the *same* place as ``tnotes auth
-    set-key`` (:func:`config.set_api_key`), so the two are interchangeable.
+    Mechanism (ADR-005, exactly): a ``powershell -Command`` shell-out invoking
+    ``WScript.Shell.CreateShortcut`` — **no** ``win32com``/``pywin32`` dependency,
+    since PowerShell ships on every Windows 10/11. The shortcut targets the *stable*
+    running exe name (``sys.executable`` when frozen) with the ``feedback``
+    argument, so it survives ADR-001's upgrade rename (which moves the new build
+    into the freed stable name); we deliberately do not encode a versioned path.
     """
-    if config.auth_source() != "none":
-        return True
-    print(
-        "tnotes needs your Anthropic API key the first time.\n"
-        "Paste your key below and press Enter (right-click to paste), or just press\n"
-        "Enter to skip. Get one at https://console.anthropic.com/settings/keys.\n"
+    if platform.system() != "Windows":
+        return False
+    target = sys.executable
+    desktop = Path.home() / "Desktop"
+    lnk = desktop / "Send Feedback.lnk"
+    # WScript.Shell builds the .lnk; TargetPath is the stable exe, Arguments is the
+    # feedback subcommand, WorkingDirectory the exe's folder. Quoting: PowerShell
+    # single-quotes take any path verbatim, and we escape an embedded single quote
+    # the PowerShell way (doubling it) so a username with a quote can't break out.
+    def ps_quote(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    script = (
+        "$w = New-Object -ComObject WScript.Shell; "
+        f"$s = $w.CreateShortcut({ps_quote(str(lnk))}); "
+        f"$s.TargetPath = {ps_quote(target)}; "
+        "$s.Arguments = 'feedback'; "
+        f"$s.WorkingDirectory = {ps_quote(str(Path(target).parent))}; "
+        "$s.Save()"
     )
     try:
-        key = input("Anthropic API key: ").strip()
-    except (EOFError, KeyboardInterrupt):
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        # PowerShell missing or unlaunchable — the safe direction is "no shortcut".
         return False
-    if not key:
-        print("\nNo key entered — nothing saved. Run me again when you have one.")
-        return False
-    config.set_api_key(key)
-    print(f"\nSaved. (Stored privately in {config.config_file()}, never in any project.)")
-    return True
-
-
-def onboard() -> None:
-    """The friendly first-screen for a bare double-click (no PDF given).
-
-    Shows what tnotes is, makes sure a key is set (prompting on first run), and
-    tells the user the one thing they need to do next — drag a PDF onto the icon.
-    Always ends paused (via the caller) so the window stays readable.
-
-    Deliberately *not* the raw ``--help`` dump: that lists a dozen power-user
-    subcommands and Typer option syntax, which is noise to someone who just
-    double-clicked an icon.
-    """
-    print("tnotes — turn a PDF into trustworthy, source-anchored notes.\n")
-    if not ensure_api_key():
-        return
-    print(
-        "\nSetup complete. Drag a PDF file onto this tnotes icon to make notes.\n"
-        "The finished book is written right next to your PDF as <name>.tnotes.pdf."
-    )
+    return result.returncode == 0

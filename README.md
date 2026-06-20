@@ -29,9 +29,19 @@ this once.
 
 A small console window opens. On the very first run it asks for your Anthropic API
 key — **paste it (right-click in the window to paste) and press Enter**. The key
-is saved privately in your home folder, so you only do this once. It then says
-*"Setup complete. Drag a PDF file onto this tnotes icon to make notes."* The
-window waits for a keypress before closing, so nothing flashes past.
+is saved privately in your home folder, so you only do this once.
+
+It then offers an **optional feedback setup** so you can report a problem later
+without a terminal. If whoever gave you tnotes also gave you a private feedback
+repo (`owner/name`) and an access token, paste those when asked (and your name, so
+reports are attributed to you); otherwise **just press Enter to skip** — you can
+set it up later. If you do set it up, tnotes offers to add a **"Send Feedback"
+shortcut to your Desktop**; answer **Y** and a shortcut appears that files a report
+in one double-click (it keeps working across upgrades). Everything you paste is
+saved privately in your home folder, never in the repo or the exe.
+
+It then says *"Setup complete. Drag a PDF file onto this tnotes icon to make
+notes."* The window waits for a keypress before closing, so nothing flashes past.
 
 > Don't have a key yet? Create one at
 > <https://console.anthropic.com/settings/keys>.
