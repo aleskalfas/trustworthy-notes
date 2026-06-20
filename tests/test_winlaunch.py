@@ -1,20 +1,23 @@
-"""Tests for the windowless-launch helpers (issue #33).
+"""Tests for the Windows-only launch *mechanics* (issues #33, #39).
 
-The real trigger — a Windows double-click / drag that gives the exe its own
-console — cannot be exercised on macOS/Linux/CI, so these tests stub the detector
-(`is_windowless_launch`) and `input` to drive every branch. The detector's own
-fail-safe contract is asserted directly (non-Windows → False; a raising ctypes
-call → False; an ambiguous count → False). First real validation of the live
-console-ownership query is a Windows run.
+The real triggers — a Windows double-click / drag that gives the exe its own
+console, and a real `.lnk` write — cannot be exercised on macOS/Linux/CI, so these
+tests stub the platform check, `ctypes`, `input`, and `subprocess` to drive every
+branch. The detector's own fail-safe contract is asserted directly (non-Windows →
+False; a raising ctypes call → False; an ambiguous count → False), and the
+shortcut primitive's PowerShell command + off-Windows no-op are asserted with
+`subprocess` mocked. First real validation of the live launch is a Windows run.
+
+The onboarding *flow* (key prompt, feedback setup) moved to `onboarding.py`; its
+tests live in `test_onboarding.py`.
 """
 
 from __future__ import annotations
 
 import builtins
+import subprocess
 
-import pytest
-
-from trustworthy_notes import config, winlaunch
+from trustworthy_notes import winlaunch
 
 
 # --- is_windowless_launch: fail-safe contract -----------------------------------
@@ -105,54 +108,59 @@ def test_pause_swallows_eof(monkeypatch):
     winlaunch.pause()  # must not propagate
 
 
-# --- ensure_api_key: prompt + save on first run -----------------------------------
+# --- create_feedback_shortcut: PowerShell command + off-Windows no-op -------------
 
 
-@pytest.fixture
-def isolated_config(tmp_path, monkeypatch):
-    """Point the config at a throwaway dir and clear the auth env/login signals."""
-    monkeypatch.setenv("TN_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    # auth_source() also checks ~/.config/anthropic; force a clean "none".
-    monkeypatch.setattr(config, "auth_source", _real_then("none"))
-    return tmp_path
+def test_shortcut_is_a_noop_off_windows(monkeypatch):
+    monkeypatch.setattr(winlaunch.platform, "system", lambda: "Darwin")
+
+    def must_not_shell_out(*_a, **_k):
+        raise AssertionError("must not shell out off Windows")
+
+    monkeypatch.setattr(winlaunch.subprocess, "run", must_not_shell_out)
+    assert winlaunch.create_feedback_shortcut() is False
 
 
-def _real_then(_value):
-    # auth_source must reflect the saved key after we write it, so we delegate to a
-    # live reimplementation keyed only on the saved config (env already cleared).
-    def fn():
-        return "config" if config.get_api_key() else "none"
+def test_shortcut_builds_powershell_command_targeting_exe_feedback(monkeypatch):
+    monkeypatch.setattr(winlaunch.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(winlaunch.sys, "executable", r"C:\Users\me\tnotes\tnotes.exe")
+    captured = {}
 
-    return fn
+    def fake_run(argv, **_k):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
 
+    monkeypatch.setattr(winlaunch.subprocess, "run", fake_run)
 
-def test_ensure_api_key_prompts_and_saves_when_unset(isolated_config, monkeypatch):
-    monkeypatch.setattr(builtins, "input", lambda _p="": "sk-ant-test-123")
-    assert config.get_api_key() is None
-    assert winlaunch.ensure_api_key() is True
-    assert config.get_api_key() == "sk-ant-test-123"
-
-
-def test_ensure_api_key_returns_false_on_empty_input(isolated_config, monkeypatch):
-    monkeypatch.setattr(builtins, "input", lambda _p="": "   ")
-    assert winlaunch.ensure_api_key() is False
-    assert config.get_api_key() is None
-
-
-def test_ensure_api_key_skips_prompt_when_already_set(isolated_config, monkeypatch):
-    config.set_api_key("sk-already-there")
-
-    def must_not_prompt(_p=""):
-        raise AssertionError("must not prompt when a key is already configured")
-
-    monkeypatch.setattr(builtins, "input", must_not_prompt)
-    assert winlaunch.ensure_api_key() is True
+    assert winlaunch.create_feedback_shortcut() is True
+    argv = captured["argv"]
+    assert argv[0] == "powershell"
+    assert "-Command" in argv
+    script = argv[-1]
+    # The target is the stable exe (sys.executable), the argument is `feedback`, and
+    # it goes onto the Desktop — never a versioned/temp path (ADR-001 survivability).
+    assert "WScript.Shell" in script and "CreateShortcut" in script
+    assert r"C:\Users\me\tnotes\tnotes.exe" in script
+    assert "$s.Arguments = 'feedback'" in script
+    assert "Send Feedback.lnk" in script
+    assert "Desktop" in script
 
 
-def test_onboard_prompts_for_key_then_prints_next_step(isolated_config, monkeypatch, capsys):
-    monkeypatch.setattr(builtins, "input", lambda _p="": "sk-ant-onboard")
-    winlaunch.onboard()
-    out = capsys.readouterr().out
-    assert config.get_api_key() == "sk-ant-onboard"
-    assert "Drag a PDF" in out
+def test_shortcut_returns_false_when_powershell_fails(monkeypatch):
+    monkeypatch.setattr(winlaunch.platform, "system", lambda: "Windows")
+
+    def fake_run(argv, **_k):
+        return subprocess.CompletedProcess(argv, 1, b"", b"boom")
+
+    monkeypatch.setattr(winlaunch.subprocess, "run", fake_run)
+    assert winlaunch.create_feedback_shortcut() is False
+
+
+def test_shortcut_returns_false_when_powershell_missing(monkeypatch):
+    monkeypatch.setattr(winlaunch.platform, "system", lambda: "Windows")
+
+    def fake_run(*_a, **_k):
+        raise OSError("powershell not found")
+
+    monkeypatch.setattr(winlaunch.subprocess, "run", fake_run)
+    assert winlaunch.create_feedback_shortcut() is False

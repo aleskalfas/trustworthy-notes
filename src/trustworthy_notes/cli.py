@@ -62,10 +62,10 @@ class _DefaultGroup(TyperGroup):
         # Typer's help. is_windowless_launch() is False off Windows and on any
         # ambiguity, so this branch is dead weight in a terminal/pipe/CI run.
         if not args:
-            from . import winlaunch
+            from . import onboarding, winlaunch
 
             if winlaunch.is_windowless_launch():
-                winlaunch.onboard()
+                onboarding.onboard()
                 winlaunch.pause()
                 raise typer.Exit()
         return super().parse_args(ctx, args)
@@ -211,7 +211,7 @@ def run(
     already finished, and writes the finished book beside the source as
     <stem>[.pRANGE].tnotes.pdf (clean prose by default; --cite for the anchored copy).
     """
-    from . import pipeline, winlaunch
+    from . import onboarding, pipeline, winlaunch
 
     # Windowless launch (a PDF dragged onto the exe, issue #33): a bare console that
     # closes on exit. Prompt for + save the key on first run before the auth gate,
@@ -219,7 +219,7 @@ def run(
     # watching the window flash shut. All of this is a no-op in a terminal/pipe/CI run
     # (is_windowless_launch() is False there), so the existing behaviour is untouched.
     windowless = winlaunch.is_windowless_launch()
-    if windowless and not winlaunch.ensure_api_key():
+    if windowless and not onboarding.ensure_api_key():
         winlaunch.pause()
         raise typer.Exit(1)
 
