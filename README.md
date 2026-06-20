@@ -33,9 +33,17 @@ is saved privately in your home folder, so you only do this once.
 
 It then offers an **optional feedback setup** so you can report a problem later
 without a terminal. If whoever gave you tnotes also gave you a private feedback
-repo (`owner/name`) and an access token, paste those when asked (and your name, so
-reports are attributed to you); otherwise **just press Enter to skip** — you can
-set it up later. If you do set it up, tnotes offers to add a **"Send Feedback"
+repo and an access token, paste those when asked (and your name, so reports are
+attributed to you); otherwise **just press Enter to skip** — you can set it up
+later. The repo prompt asks for the `owner/name` form (e.g. `acme/tnotes-feedback`)
+but also accepts a pasted GitHub URL (`https://github.com/owner/name`) — it strips
+it back to `owner/name` for you. If whoever gave you tnotes **pre-seeded the repo**
+for you, it shows up as the default and you can just press Enter to keep it, so all
+you paste is the token. Once you've entered the details, tnotes **checks the
+connection** and tells you whether it worked (`Connected — feedback is ready.`); if
+it can't reach the repo it shows why and lets you re-enter the token, save anyway
+(handy if you're just offline), or skip — so you never end up with broken details
+saved as "ready". If the setup succeeds, tnotes offers to add a **"Send Feedback"
 shortcut to your Desktop**; answer **Y** and a shortcut appears that files a report
 in one double-click (it keeps working across upgrades). Everything you paste is
 saved privately in your home folder, never in the repo or the exe.
@@ -375,6 +383,12 @@ tnotes config set-reporter-name "Your Name"             # optional; otherwise as
 The token is a fine-grained GitHub PAT scoped to that one private repo (Issues +
 Contents). It is stored in your local config, the same place as the Anthropic key —
 never committed, never inside the exe.
+
+Tip for shipping to a non-technical Windows user: run `set-feedback-repo` on the
+machine before handing it over, so the first-run setup shows that repo as the
+default and the end user only has to paste the token. The first-run flow then
+verifies the connection before saving, so they get an immediate
+`Connected — feedback is ready.` (or a clear reason if the token is wrong).
 
 ## Platform
 
