@@ -97,3 +97,18 @@ def test_resolve_effort_empty_flag_is_explicit_not_unset(cfg):
     # Passing '' on the flag is an explicit choice and wins over config.
     cfg.set_effort("high")
     assert cfg.resolve_effort("") == ""
+
+
+def test_feedback_config_round_trips_and_is_isolated(cfg):
+    assert cfg.get_feedback_repo() is None
+    assert cfg.get_feedback_token() is None
+    assert cfg.get_reporter_name() is None
+    cfg.set_api_key("sk-keep")
+    cfg.set_feedback_repo("acme/tn-feedback")
+    cfg.set_feedback_token("ghp_xxx")
+    cfg.set_reporter_name("Jana")
+    assert cfg.get_feedback_repo() == "acme/tn-feedback"
+    assert cfg.get_feedback_token() == "ghp_xxx"
+    assert cfg.get_reporter_name() == "Jana"
+    # Feedback keys must not clobber the API key (shared config file).
+    assert cfg.get_api_key() == "sk-keep"

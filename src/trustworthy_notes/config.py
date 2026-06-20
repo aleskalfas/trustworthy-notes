@@ -128,6 +128,52 @@ def resolve_effort(flag: Optional[str]) -> str:
     return cfg_effort if cfg_effort is not None else DEFAULT_EFFORT
 
 
+def get_feedback_repo() -> Optional[str]:
+    """The private feedback repo as ``owner/name``, or None if unset.
+
+    Where ``tnotes feedback`` files issues + commits repro bundles. The repo is the
+    maintainer's manual setup; absent here, feedback falls back to a local file.
+    """
+    return load().get("feedback_repo") or None
+
+
+def set_feedback_repo(repo: str) -> None:
+    cfg = load()
+    cfg["feedback_repo"] = repo
+    save(cfg)
+
+
+def get_feedback_token() -> Optional[str]:
+    """The fine-grained GitHub PAT for the feedback repo, or None if unset.
+
+    Scoped to one private repo (Issues + Contents). Delivered out-of-band (1Password)
+    and stored here in the user config — *never* baked into the binary. Absent or
+    expired (401 at use), feedback falls back to a local file.
+    """
+    return load().get("feedback_token") or None
+
+
+def set_feedback_token(token: str) -> None:
+    cfg = load()
+    cfg["feedback_token"] = token
+    save(cfg)
+
+
+def get_reporter_name() -> Optional[str]:
+    """The reporter's name, asked once on first feedback and remembered.
+
+    Tagged into every report ("Reported by: <name>") because the PAT authors as the
+    maintainer's account, so the body carries the attribution the author can't.
+    """
+    return load().get("reporter_name") or None
+
+
+def set_reporter_name(name: str) -> None:
+    cfg = load()
+    cfg["reporter_name"] = name
+    save(cfg)
+
+
 def get_no_update_check() -> bool:
     """True when the launch-time update nudge is opted out in the user config.
 

@@ -359,6 +359,46 @@ def config_set_no_update_check(
     typer.echo(f"Launch-time upgrade nudge: {state} ({config.config_file()}).")
 
 
+@config_app.command("set-feedback-repo")
+def config_set_feedback_repo(
+    repo: str = typer.Argument(..., help="Private feedback repo as owner/name, e.g. acme/tnotes-feedback.")
+):
+    """Save the private feedback repo `tnotes feedback` files into (owner/name).
+
+    The repo + its PAT are the maintainer's manual setup; when unset, `tnotes
+    feedback` falls back to writing a local file instead of filing online.
+    """
+    config.set_feedback_repo(repo)
+    typer.echo(f"Saved feedback repo: {repo} ({config.config_file()}).")
+
+
+@config_app.command("set-feedback-token")
+def config_set_feedback_token():
+    """Save the fine-grained GitHub PAT for the feedback repo (stored privately).
+
+    Get this token from the maintainer (delivered out-of-band, e.g. 1Password) — it
+    is NEVER baked into the binary. Scoped to one private repo (Issues + Contents).
+    """
+    token = typer.prompt("Paste the feedback PAT", hide_input=True).strip()
+    if not token:
+        typer.echo("No token entered — nothing saved.", err=True)
+        raise typer.Exit(1)
+    config.set_feedback_token(token)
+    typer.echo(
+        f"Saved feedback token to {config.config_file()} (private to your home, "
+        f"never in the repo or the exe)."
+    )
+
+
+@config_app.command("set-reporter-name")
+def config_set_reporter_name(
+    name: str = typer.Argument(..., help="Your name, tagged onto every report you send.")
+):
+    """Save your reporter name (asked once on first feedback, remembered after)."""
+    config.set_reporter_name(name)
+    typer.echo(f"Saved reporter name: {name} ({config.config_file()}).")
+
+
 @config_app.command("show")
 def config_show():
     """Show the resolved default model and effort, and where each comes from."""
@@ -372,6 +412,10 @@ def config_show():
     typer.echo(f"config file : {config.config_file()}")
     typer.echo(f"model : {model}  (from {model_src})")
     typer.echo(f"effort: {effort_shown}  (from {effort_src})")
+    repo = config.get_feedback_repo()
+    typer.echo(f"feedback repo : {repo or 'not set'}")
+    typer.echo(f"feedback token: {'set' if config.get_feedback_token() else 'not set (falls back to local file)'}")
+    typer.echo(f"reporter name : {config.get_reporter_name() or 'not set (asked on first feedback)'}")
     typer.echo("A --model/--effort flag on `tnotes extract` overrides these.")
 
 
@@ -1395,6 +1439,78 @@ def chapters(
 
     fp = report.inputs_fingerprint(input, notes_dir)
     report.emit(workspace.compose_stage_dir(notes_dir, "chapter-map") / "chapters.txt", fp, force, render, label="tnotes chapters")
+
+
+@app.command()
+def feedback(
+    message: str = typer.Argument(None, help="What went wrong. Prompted for if omitted."),
+    doc: Path = typer.Option(
+        None, "--doc", exists=True, dir_okay=False,
+        help="The PDF the problem is about — its .tnotes notes + page range are bundled for reproduction.",
+    ),
+    pages: str = typer.Option(
+        None, "--pages", "-p",
+        help="Restrict the bundled notes to a page range: '12', '10-14', or '10,12'. Default: all the doc's notes.",
+    ),
+):
+    """Report a problem — files a structured issue into the private feedback repo.
+
+    Captures diagnostics (version, OS, your message), bundles the referenced
+    document's notes + page range for reproduction, AI-structures the report, and —
+    with the feedback repo + token configured and your consent — files it as a
+    GitHub issue. When that isn't possible (unconfigured, offline, expired token, or
+    you decline the upload), it saves everything to a local file so feedback is never
+    lost. The bundle carries verbatim source excerpts, so you're shown exactly what
+    will be uploaded and asked before anything leaves your machine.
+    """
+    from . import feedback as feedbackmod
+
+    if not message:
+        message = typer.prompt("What went wrong?").strip()
+    if not message:
+        typer.echo("No message entered — nothing to report.", err=True)
+        raise typer.Exit(1)
+
+    # Reporter name: asked once, then remembered (every report is tagged with it,
+    # because the PAT authors as the maintainer's account, not the user's).
+    reporter = config.get_reporter_name()
+    if not reporter:
+        reporter = typer.prompt("Your name (remembered for next time)").strip()
+        if reporter:
+            config.set_reporter_name(reporter)
+
+    def confirm(preview: str) -> bool:
+        typer.echo(preview)
+        return typer.confirm("\nSend this?", default=False)
+
+    def log(msg: str) -> None:
+        typer.echo(msg, err=True)
+
+    # The bundle and any local fallback land in the document's own .tnotes folder
+    # when a doc is given (keeps repro data beside its source), else the config dir.
+    fallback_dir = workspace.work_dir(doc) if doc else config.config_dir()
+
+    outcome = feedbackmod.run_feedback(
+        message,
+        reporter=reporter or "(anonymous)",
+        doc=doc,
+        pages=pages,
+        model=config.resolve_model(None),
+        api_key=config.get_api_key(),
+        repo=config.get_feedback_repo(),
+        token=config.get_feedback_token(),
+        fallback_dir=fallback_dir,
+        confirm=confirm,
+        log=log,
+    )
+
+    if outcome.filed:
+        typer.echo(f"Sent — thanks, {outcome.reporter}.")
+        typer.echo(f"(issue: {outcome.location})", err=True)
+    else:
+        typer.echo(f"Saved your report to {outcome.location}")
+        if outcome.reason:
+            typer.echo(f"({outcome.reason} — send that file to the maintainer)", err=True)
 
 
 @app.command()

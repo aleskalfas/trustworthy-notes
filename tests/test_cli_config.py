@@ -58,6 +58,39 @@ def test_config_set_no_update_check_round_trips(cli):
     assert cli.config.get_no_update_check() is False
 
 
+def test_config_set_feedback_repo_and_reporter_round_trip(cli):
+    res = runner.invoke(cli.app, ["config", "set-feedback-repo", "acme/tn-feedback"])
+    assert res.exit_code == 0
+    res = runner.invoke(cli.app, ["config", "set-reporter-name", "Jana"])
+    assert res.exit_code == 0
+    assert cli.config.get_feedback_repo() == "acme/tn-feedback"
+    assert cli.config.get_reporter_name() == "Jana"
+    res = runner.invoke(cli.app, ["config", "show"])
+    assert "acme/tn-feedback" in res.stdout
+    assert "Jana" in res.stdout
+
+
+def test_config_set_feedback_token_prompts_and_saves(cli):
+    res = runner.invoke(cli.app, ["config", "set-feedback-token"], input="ghp_secret\n")
+    assert res.exit_code == 0
+    assert cli.config.get_feedback_token() == "ghp_secret"
+    # The token value must not be echoed back to the terminal (hidden input).
+    assert "ghp_secret" not in res.stdout
+
+
+def test_feedback_unconfigured_saves_local_file(cli, tmp_path, monkeypatch):
+    # No feedback repo/token + no API key → raw-text report saved to a local file,
+    # no consent prompt (nothing leaves the machine). No network at all.
+    monkeypatch.setattr(cli.config, "get_api_key", lambda: None)
+    monkeypatch.setattr(cli.config, "config_dir", lambda: tmp_path)
+    res = runner.invoke(cli.app, ["feedback", "page 12 looks wrong"], input="Jana\n")
+    assert res.exit_code == 0, res.stdout
+    assert "Saved your report to" in res.stdout
+    saved = list(tmp_path.glob("feedback-*.txt"))
+    assert len(saved) == 1
+    assert "page 12 looks wrong" in saved[0].read_text(encoding="utf-8")
+
+
 def _stub_extract_pipeline(cli, monkeypatch):
     """Stub ingest + extraction so `tnotes extract` runs without a PDF or network,
     and return a dict that captures the (model, effort) the extractor saw."""
