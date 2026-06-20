@@ -387,6 +387,83 @@ def _commit_bundle(bundle: Path, repo: str, client: GitHubClient, stamp: str) ->
     return url
 
 
+# --- Listing existing issues (read-only, inbound) ------------------------------
+
+
+@dataclass
+class IssueSummary:
+    """One already-reported issue, as shown to the user (number, title, state)."""
+
+    number: int
+    title: str
+    state: str
+
+
+@dataclass
+class IssueListing:
+    """The result of listing existing reports — always returned, never raised.
+
+    ``available`` True ⇒ ``issues`` is the (possibly empty) list of reports that
+    were fetched. ``available`` False ⇒ the listing couldn't be fetched (offline,
+    unconfigured, 401/404, or an unexpected response) and ``reason`` says why; the
+    flow shows a clear "couldn't list" line and carries on. There is no consent
+    gate on this path — see :func:`list_recent_issues`.
+    """
+
+    available: bool
+    issues: list[IssueSummary] = field(default_factory=list)
+    reason: Optional[str] = None
+
+
+def list_recent_issues(
+    repo: Optional[str],
+    token: Optional[str],
+    *,
+    limit: int = 10,
+    github_client: Optional[GitHubClient] = None,
+) -> IssueListing:
+    """List recent open reports in the private feedback repo, so the user can see
+    what's already been reported and avoid duplicates.
+
+    Per ADR-003 this is a read-only **inbound** path: it pulls maintainer-authored
+    issue titles/state *onto* the user's screen — nothing leaves the machine — so it
+    carries **no consent gate**, unlike the upload path. It degrades exactly like the
+    write path: unconfigured repo/token, offline, a 401/404, or an unexpected shape
+    all return ``available=False`` with a reason, **never** raising into the flow.
+
+    Reuses the existing injectable ``GitHubClient.get`` seam (so tests stub the HTTP
+    layer), and stays inside this module — the ``cli → feedback`` isolation invariant
+    holds; the pipeline never imports it.
+    """
+    if not repo or not token:
+        return IssueListing(available=False, reason="no feedback repo/token configured")
+    client = github_client or GitHubClient(token=token)
+    url = (
+        f"{_GITHUB_API}/repos/{repo}/issues"
+        f"?state=open&sort=created&direction=desc&per_page={limit}"
+    )
+    try:
+        raw = client.get(url, client.token)
+    except FeedbackError as exc:
+        return IssueListing(available=False, reason=str(exc))
+    # GitHub's list-issues endpoint returns a JSON array; anything else is unexpected.
+    if not isinstance(raw, list):
+        return IssueListing(available=False, reason="unexpected response listing issues")
+    issues: list[IssueSummary] = []
+    for item in raw:
+        # The issues endpoint also returns pull requests; skip those.
+        if not isinstance(item, dict) or "pull_request" in item:
+            continue
+        number = item.get("number")
+        title = item.get("title")
+        if number is None or title is None:
+            continue
+        issues.append(
+            IssueSummary(number=int(number), title=str(title), state=str(item.get("state", "open")))
+        )
+    return IssueListing(available=True, issues=issues)
+
+
 # --- Local-file fallback -------------------------------------------------------
 
 
