@@ -313,6 +313,43 @@ their inputs change (`--force` regenerates). Override the location with `--out D
 (`--notes DIR` for `tnotes gap`/`chapters`/`stitches`). These folders are git-ignored —
 they hold verbatim source excerpts.
 
+### Reporting a problem (`tnotes feedback`)
+
+When something looks wrong, `tnotes feedback` files a structured report for the
+maintainer — no GitHub account needed:
+
+```
+tnotes feedback "page 12 export looks wrong" --doc data/Foo.pdf --pages 12
+```
+
+It captures diagnostics (tool version, OS, your message), bundles the referenced
+document's `.tnotes` notes for the given page range (for reproduction), and uses
+Claude to reshape your report into a clean title / summary / reproduction (with a
+plain raw-text fallback if no API key is set or the call fails). The message and
+`--doc`/`--pages` are optional — it prompts for the message, and asks your name
+once and remembers it.
+
+The bundle contains **verbatim excerpts of your source document**, so before
+anything leaves your machine you're shown exactly what will be uploaded and asked
+to confirm. On confirm (and with the feedback repo + token configured), it files a
+GitHub issue into a **private** repo and commits the bundle there. Otherwise — not
+configured, offline, an expired token, or you decline — it saves the report and
+bundle to a local `feedback-<timestamp>.txt` and tells you where, so feedback is
+never lost.
+
+The private repo and its token are the maintainer's setup, delivered out of band
+(never baked into the binary):
+
+```
+tnotes config set-feedback-repo owner/tnotes-feedback   # the private repo
+tnotes config set-feedback-token                        # paste the fine-grained PAT (hidden)
+tnotes config set-reporter-name "Your Name"             # optional; otherwise asked once
+```
+
+The token is a fine-grained GitHub PAT scoped to that one private repo (Issues +
+Contents). It is stored in your local config, the same place as the Anthropic key —
+never committed, never inside the exe.
+
 ## Platform
 
 Pure-Python, no system binaries (no poppler/ghostscript/ImageMagick), so it's
