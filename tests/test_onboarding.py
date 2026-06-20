@@ -158,6 +158,20 @@ def test_setup_feedback_default_from_config_accepted_on_enter(isolated_config, m
     assert calls == [("acme/preseeded", "ghp_tok")]
 
 
+def test_setup_feedback_dirty_url_default_is_normalised_on_keep(isolated_config, monkeypatch):
+    # #50 defensive: a config dirtied before the storage fix (a full URL stored as
+    # feedback_repo) is canonicalised when the user keeps it as the default, so the
+    # connection check runs against owner/name instead of 404ing again.
+    raw = config.load()
+    raw["feedback_repo"] = "https://github.com/acme/preseeded"
+    config.save(raw)
+    calls = _stub_listing(monkeypatch, available=True)
+    monkeypatch.setattr(builtins, "input", _scripted_input(["", "ghp_tok", ""]))
+    assert onboarding.setup_feedback() is True
+    assert config.get_feedback_repo() == "acme/preseeded"
+    assert calls == [("acme/preseeded", "ghp_tok")]
+
+
 def test_setup_feedback_failed_check_then_retry_succeeds(isolated_config, monkeypatch):
     # #47: first token fails the check; user re-enters (r), keeps the repo (Enter),
     # pastes a good token, and the second check passes and saves.

@@ -112,3 +112,20 @@ def test_feedback_config_round_trips_and_is_isolated(cfg):
     assert cfg.get_reporter_name() == "Jana"
     # Feedback keys must not clobber the API key (shared config file).
     assert cfg.get_api_key() == "sk-keep"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("acme/tn-feedback", "acme/tn-feedback"),
+        ("https://github.com/acme/tn-feedback", "acme/tn-feedback"),
+        ("https://github.com/acme/tn-feedback/", "acme/tn-feedback"),
+        ("https://www.github.com/acme/tn-feedback.git", "acme/tn-feedback"),
+        ("git@github.com:acme/tn-feedback.git", "acme/tn-feedback"),
+    ],
+)
+def test_set_feedback_repo_normalises_url_to_owner_name(cfg, raw, expected):
+    # #50: a URL must never be persisted verbatim (it would 404 on every call);
+    # the storage boundary canonicalises to owner/name regardless of entry point.
+    cfg.set_feedback_repo(raw)
+    assert cfg.get_feedback_repo() == expected

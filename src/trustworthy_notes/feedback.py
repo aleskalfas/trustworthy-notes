@@ -331,7 +331,15 @@ def _urllib_request(url: str, token: str, *, method: str, payload: Optional[dict
                 "feedback token rejected (401) — it is missing or expired; "
                 "ask the maintainer for a fresh one"
             ) from exc
-        raise FeedbackError(f"GitHub API error {exc.code} filing feedback") from exc
+        if exc.code == 404:
+            # Used on reads (listing) and writes (filing); a 404 almost always
+            # means a wrong repo path or a token without access — not a write
+            # failure — so the message must not imply "filing".
+            raise FeedbackError(
+                "repo not found (404) — check the feedback repo is 'owner/name' "
+                "and the token has access to it"
+            ) from exc
+        raise FeedbackError(f"GitHub API error {exc.code} reaching the feedback repo") from exc
     except Exception as exc:  # offline, DNS, timeout — collapse to one fallback type
         raise FeedbackError(f"could not reach the feedback repo: {exc}") from exc
 

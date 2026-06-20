@@ -21,25 +21,17 @@ its console code, and ADR-005 restates for the shortcut.
 
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from . import config, feedback, winlaunch
+# Canonical impl lives in config (the storage boundary normalises too, #50);
+# re-exported here so the prompt and existing references use one implementation.
+from .config import normalise_feedback_repo
 
 # How many times the first-run connection check re-prompts before it gives up and
 # declines to save (issue #47). Bounded so a wrong token can't trap a windowless
 # user in an endless prompt; "save anyway" and "skip" are always one keypress out.
 _MAX_CONNECTION_RETRIES = 3
-
-# A GitHub repo URL we are willing to strip back to ``owner/name`` so a user who
-# pastes the browser/clone URL isn't rejected (issue #47). Matches the host with
-# the common prefixes (https/http, optional ``www.``, the ``git@`` SCP form) and
-# captures the ``owner/name`` after it; a trailing ``.git`` and/or ``/`` are
-# trimmed separately so the one expression stays readable.
-_GITHUB_URL_RE = re.compile(
-    r"^(?:https?://(?:www\.)?github\.com/|git@github\.com:)(?P<path>.+)$",
-    re.IGNORECASE,
-)
 
 
 def ensure_api_key() -> bool:
@@ -73,28 +65,6 @@ def ensure_api_key() -> bool:
     config.set_api_key(key)
     print(f"\nSaved. (Stored privately in {config.config_file()}, never in any project.)")
     return True
-
-
-def normalise_feedback_repo(raw: str) -> str:
-    """Reduce a pasted repo reference to the ``owner/name`` form config expects.
-
-    A bare ``owner/name`` passes through unchanged. A full GitHub URL — the browser
-    address ``https://github.com/owner/name``, the ``git@github.com:owner/name``
-    clone form, with or without a trailing ``.git`` or ``/`` — is stripped back to
-    ``owner/name`` (issue #47: a user pasted a URL into a field that only documented
-    ``owner/name``). Forgiving by design: anything it doesn't recognise as a URL is
-    returned trimmed and otherwise untouched, so a typo still reaches the connection
-    check (which is what actually decides whether the value works) rather than being
-    silently rewritten here.
-    """
-    value = raw.strip()
-    match = _GITHUB_URL_RE.match(value)
-    if match:
-        value = match.group("path")
-    value = value.rstrip("/")
-    if value.endswith(".git"):
-        value = value[: -len(".git")]
-    return value.strip("/")
 
 
 def setup_feedback() -> bool:
@@ -186,7 +156,9 @@ def _prompt_repo(repo_default: Optional[str]) -> str:
         prompt = "Feedback repo (e.g. acme/tnotes-feedback), or Enter to skip: "
     answer = input(prompt).strip()
     if not answer:
-        return repo_default or ""
+        # Normalise the kept default too: an already-dirty config (a URL stored
+        # before #50) is canonicalised on confirm instead of 404ing again.
+        return normalise_feedback_repo(repo_default) if repo_default else ""
     return normalise_feedback_repo(answer)
 
 
