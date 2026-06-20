@@ -14,7 +14,24 @@ import builtins
 
 import pytest
 
-from trustworthy_notes import config, onboarding, winlaunch
+from trustworthy_notes import config, feedback, onboarding, winlaunch
+
+
+def _stub_listing(monkeypatch, *, available, reason=None):
+    """Stub the read-only connection check that setup_feedback now runs (issue #47).
+
+    setup_feedback verifies repo+token via feedback.list_recent_issues before
+    saving; tests drive both the success and failure paths through this stub so no
+    network is touched. Records the (repo, token) pairs it was called with.
+    """
+    calls = []
+
+    def fake(repo, token, **_kw):
+        calls.append((repo, token))
+        return feedback.IssueListing(available=available, reason=reason)
+
+    monkeypatch.setattr(feedback, "list_recent_issues", fake)
+    return calls
 
 
 @pytest.fixture
@@ -76,6 +93,7 @@ def test_ensure_api_key_skips_prompt_when_already_set(isolated_config, monkeypat
 
 
 def test_setup_feedback_stores_repo_token_and_name_when_opted_in(isolated_config, monkeypatch):
+    _stub_listing(monkeypatch, available=True)
     monkeypatch.setattr(
         builtins,
         "input",
@@ -88,6 +106,7 @@ def test_setup_feedback_stores_repo_token_and_name_when_opted_in(isolated_config
 
 
 def test_setup_feedback_name_is_optional(isolated_config, monkeypatch):
+    _stub_listing(monkeypatch, available=True)
     monkeypatch.setattr(
         builtins, "input", _scripted_input(["acme/fb", "ghp_tok", ""])
     )
@@ -95,6 +114,20 @@ def test_setup_feedback_name_is_optional(isolated_config, monkeypatch):
     assert config.get_feedback_repo() == "acme/fb"
     assert config.get_feedback_token() == "ghp_tok"
     assert config.get_reporter_name() is None
+
+
+def test_setup_feedback_normalises_pasted_url(isolated_config, monkeypatch):
+    # #47: a user pastes the browser URL; it is stripped to owner/name and the
+    # connection check sees the normalised value.
+    calls = _stub_listing(monkeypatch, available=True)
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        _scripted_input(["https://github.com/acme/fb.git", "ghp_tok", ""]),
+    )
+    assert onboarding.setup_feedback() is True
+    assert config.get_feedback_repo() == "acme/fb"
+    assert calls == [("acme/fb", "ghp_tok")]
 
 
 def test_setup_feedback_skips_cleanly_on_empty_repo(isolated_config, monkeypatch):
@@ -113,6 +146,70 @@ def test_setup_feedback_skips_when_token_left_blank(isolated_config, monkeypatch
     assert config.get_feedback_token() is None
 
 
+def test_setup_feedback_default_from_config_accepted_on_enter(isolated_config, monkeypatch):
+    # #47: maintainer pre-seeded only the repo; the end user presses Enter at the
+    # repo prompt to accept it and just pastes the token.
+    config.set_feedback_repo("acme/preseeded")
+    calls = _stub_listing(monkeypatch, available=True)
+    monkeypatch.setattr(builtins, "input", _scripted_input(["", "ghp_tok", ""]))
+    assert onboarding.setup_feedback() is True
+    assert config.get_feedback_repo() == "acme/preseeded"
+    assert config.get_feedback_token() == "ghp_tok"
+    assert calls == [("acme/preseeded", "ghp_tok")]
+
+
+def test_setup_feedback_failed_check_then_retry_succeeds(isolated_config, monkeypatch):
+    # #47: first token fails the check; user re-enters (r), keeps the repo (Enter),
+    # pastes a good token, and the second check passes and saves.
+    listings = iter(
+        [
+            feedback.IssueListing(available=False, reason="feedback token rejected (401)"),
+            feedback.IssueListing(available=True),
+        ]
+    )
+    seen = []
+
+    def fake(repo, token, **_kw):
+        seen.append((repo, token))
+        return next(listings)
+
+    monkeypatch.setattr(feedback, "list_recent_issues", fake)
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        _scripted_input(["acme/fb", "ghp_bad", "Ada", "r", "", "ghp_good"]),
+    )
+    assert onboarding.setup_feedback() is True
+    assert config.get_feedback_token() == "ghp_good"
+    assert config.get_reporter_name() == "Ada"
+    assert seen == [("acme/fb", "ghp_bad"), ("acme/fb", "ghp_good")]
+
+
+def test_setup_feedback_failed_check_proceed_anyway_saves(isolated_config, monkeypatch, capsys):
+    # #47: an offline-but-correct setup must stay possible by explicit choice —
+    # the check fails, the user chooses [p] and the details are saved unverified.
+    _stub_listing(monkeypatch, available=False, reason="could not reach the feedback repo")
+    monkeypatch.setattr(
+        builtins, "input", _scripted_input(["acme/fb", "ghp_tok", "", "p"])
+    )
+    assert onboarding.setup_feedback() is True
+    assert config.get_feedback_repo() == "acme/fb"
+    assert config.get_feedback_token() == "ghp_tok"
+    out = capsys.readouterr().out
+    assert "could not reach the feedback repo" in out
+
+
+def test_setup_feedback_failed_check_skip_saves_nothing(isolated_config, monkeypatch):
+    # #47: the check fails and the user chooses [s] — nothing broken is saved as ready.
+    _stub_listing(monkeypatch, available=False, reason="feedback token rejected (401)")
+    monkeypatch.setattr(
+        builtins, "input", _scripted_input(["acme/fb", "ghp_tok", "", "s"])
+    )
+    assert onboarding.setup_feedback() is False
+    assert config.get_feedback_repo() is None
+    assert config.get_feedback_token() is None
+
+
 def test_setup_feedback_short_circuits_when_already_configured(isolated_config, monkeypatch):
     config.set_feedback_repo("acme/fb")
     config.set_feedback_token("ghp_existing")
@@ -122,6 +219,26 @@ def test_setup_feedback_short_circuits_when_already_configured(isolated_config, 
 
     monkeypatch.setattr(builtins, "input", must_not_prompt)
     assert onboarding.setup_feedback() is True
+
+
+# --- normalise_feedback_repo: forgiving URL → owner/name (issue #47) ----------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("acme/fb", "acme/fb"),
+        ("  acme/fb  ", "acme/fb"),
+        ("https://github.com/acme/fb", "acme/fb"),
+        ("https://github.com/acme/fb/", "acme/fb"),
+        ("https://github.com/acme/fb.git", "acme/fb"),
+        ("http://www.github.com/acme/fb", "acme/fb"),
+        ("git@github.com:acme/fb.git", "acme/fb"),
+        ("HTTPS://GitHub.com/acme/fb", "acme/fb"),
+    ],
+)
+def test_normalise_feedback_repo(raw, expected):
+    assert onboarding.normalise_feedback_repo(raw) == expected
 
 
 # --- offer_feedback_shortcut: one-tap confirm gates the (mocked) primitive ----------
@@ -165,6 +282,7 @@ def test_shortcut_offer_declines_on_no(monkeypatch):
 
 def test_onboard_full_optin_flow_stores_everything(isolated_config, monkeypatch, capsys):
     # Key prompt, then repo/token/name, then 'y' to the shortcut offer.
+    _stub_listing(monkeypatch, available=True)
     monkeypatch.setattr(
         builtins,
         "input",

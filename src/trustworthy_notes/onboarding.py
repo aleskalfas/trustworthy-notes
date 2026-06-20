@@ -21,7 +21,25 @@ its console code, and ADR-005 restates for the shortcut.
 
 from __future__ import annotations
 
-from . import config, winlaunch
+import re
+from typing import Optional
+
+from . import config, feedback, winlaunch
+
+# How many times the first-run connection check re-prompts before it gives up and
+# declines to save (issue #47). Bounded so a wrong token can't trap a windowless
+# user in an endless prompt; "save anyway" and "skip" are always one keypress out.
+_MAX_CONNECTION_RETRIES = 3
+
+# A GitHub repo URL we are willing to strip back to ``owner/name`` so a user who
+# pastes the browser/clone URL isn't rejected (issue #47). Matches the host with
+# the common prefixes (https/http, optional ``www.``, the ``git@`` SCP form) and
+# captures the ``owner/name`` after it; a trailing ``.git`` and/or ``/`` are
+# trimmed separately so the one expression stays readable.
+_GITHUB_URL_RE = re.compile(
+    r"^(?:https?://(?:www\.)?github\.com/|git@github\.com:)(?P<path>.+)$",
+    re.IGNORECASE,
+)
 
 
 def ensure_api_key() -> bool:
@@ -57,6 +75,28 @@ def ensure_api_key() -> bool:
     return True
 
 
+def normalise_feedback_repo(raw: str) -> str:
+    """Reduce a pasted repo reference to the ``owner/name`` form config expects.
+
+    A bare ``owner/name`` passes through unchanged. A full GitHub URL — the browser
+    address ``https://github.com/owner/name``, the ``git@github.com:owner/name``
+    clone form, with or without a trailing ``.git`` or ``/`` — is stripped back to
+    ``owner/name`` (issue #47: a user pasted a URL into a field that only documented
+    ``owner/name``). Forgiving by design: anything it doesn't recognise as a URL is
+    returned trimmed and otherwise untouched, so a typo still reaches the connection
+    check (which is what actually decides whether the value works) rather than being
+    silently rewritten here.
+    """
+    value = raw.strip()
+    match = _GITHUB_URL_RE.match(value)
+    if match:
+        value = match.group("path")
+    value = value.rstrip("/")
+    if value.endswith(".git"):
+        value = value[: -len(".git")]
+    return value.strip("/")
+
+
 def setup_feedback() -> bool:
     """Optional first-run step: capture the feedback credentials, no terminal needed.
 
@@ -74,19 +114,42 @@ def setup_feedback() -> bool:
     commands (:func:`config.set_feedback_repo` / :func:`config.set_feedback_token`
     / :func:`config.set_reporter_name`), so the two are interchangeable.
 
+    Three #47 refinements over the original one-shot capture:
+
+    * The repo prompt names the ``owner/name`` shape with an example and tolerates a
+      pasted GitHub URL (:func:`normalise_feedback_repo`), because a user typed
+      their own name into the field when it wasn't clear what it wanted.
+    * A repo already in config (e.g. the maintainer pre-seeded it with ``tnotes
+      config set-feedback-repo``) is offered as the default and accepted on Enter,
+      so the end user only has to paste the token. The default is *config-driven* —
+      no repo is ever hardcoded here (ADR-003).
+    * Before saving, the repo+token pair is verified with a read-only connection
+      check (:func:`feedback.list_recent_issues`, an inbound path with no consent
+      gate per ADR-003). Success reports "Connected"; failure reports the reason and
+      lets the user re-enter the token/repo, proceed anyway, or skip — we never save
+      a broken pair while claiming it is ready, but an offline-yet-correct setup
+      stays possible by explicit choice.
+
     The token prompt is plain ``input`` (not hidden), for the same paste-feedback
     reason as the API key above. An already-configured repo+token short-circuits to
     ``True`` without nagging.
     """
     if config.get_feedback_repo() and config.get_feedback_token():
         return True
-    print(
+    repo_default = config.get_feedback_repo()
+    intro = (
         "\nOptional: set up feedback so you can report a problem with one click.\n"
         "You'll need a private feedback repo and its access token from whoever\n"
         "gave you tnotes. Press Enter to skip — you can always do this later.\n"
     )
+    if repo_default:
+        intro += (
+            f"\nA feedback repo is already set up ({repo_default}); just paste the\n"
+            "access token below to finish.\n"
+        )
+    print(intro)
     try:
-        repo = input("Feedback repo (owner/name), or Enter to skip: ").strip()
+        repo = _prompt_repo(repo_default)
         if not repo:
             print("Skipped feedback setup.")
             return False
@@ -95,15 +158,74 @@ def setup_feedback() -> bool:
             print("No token entered — skipping feedback setup. Run me again to finish it.")
             return False
         name = input("Your name (tagged onto reports), or Enter to skip: ").strip()
+        repo, token, save = _verify_feedback_connection(repo, token)
     except (EOFError, KeyboardInterrupt):
         return False
 
+    if not save:
+        print("Skipped feedback setup. Run me again when you have working details.")
+        return False
     config.set_feedback_repo(repo)
     config.set_feedback_token(token)
     if name:
         config.set_reporter_name(name)
     print(f"\nFeedback ready. (Saved privately in {config.config_file()}.)")
     return True
+
+
+def _prompt_repo(repo_default: Optional[str]) -> str:
+    """Prompt for the feedback repo as ``owner/name``, normalising a pasted URL.
+
+    When ``repo_default`` is set (config-seeded), Enter accepts it; otherwise Enter
+    skips the whole step (an empty return signals "skip" to the caller). The example
+    in the prompt makes the expected shape unambiguous.
+    """
+    if repo_default:
+        prompt = f"Feedback repo (owner/name) [{repo_default}], or Enter to keep it: "
+    else:
+        prompt = "Feedback repo (e.g. acme/tnotes-feedback), or Enter to skip: "
+    answer = input(prompt).strip()
+    if not answer:
+        return repo_default or ""
+    return normalise_feedback_repo(answer)
+
+
+def _verify_feedback_connection(repo: str, token: str) -> tuple[str, str, bool]:
+    """Confirm repo+token actually reach the repo before we save them.
+
+    Runs the read-only :func:`feedback.list_recent_issues` check (ADR-003 inbound
+    path, never raises). On success returns ``(repo, token, True)``. On failure it
+    tells the user the reason and offers a small bounded loop: retry with a fresh
+    token (and optionally a different repo), proceed-and-save anyway (so an
+    offline-but-correct setup is still possible by explicit choice), or skip. The
+    returned ``save`` flag tells the caller whether to persist the (possibly
+    re-entered) pair. The loop is bounded so a wrong token can't trap the user in an
+    infinite prompt.
+    """
+    for _ in range(_MAX_CONNECTION_RETRIES):
+        listing = feedback.list_recent_issues(repo, token)
+        if listing.available:
+            print("\nConnected — feedback is ready.")
+            return repo, token, True
+        print(
+            f"\nCouldn't reach that repo with that token — {listing.reason}.\n"
+            "  [r] re-enter the token (and repo)   "
+            "[p] save anyway (e.g. you're offline)   [s] skip"
+        )
+        choice = input("Choose [r/p/s]: ").strip().lower()
+        if choice == "p":
+            print("Saving the details unverified — feedback will try again when you use it.")
+            return repo, token, True
+        if choice == "s" or choice not in ("r", ""):
+            return repo, token, False
+        new_repo = _prompt_repo(repo)
+        if new_repo:
+            repo = new_repo
+        token = input("Feedback access token (right-click to paste): ").strip()
+        if not token:
+            return repo, token, False
+    print("Still couldn't connect after a few tries — not saving as ready.")
+    return repo, token, False
 
 
 def offer_feedback_shortcut() -> None:
