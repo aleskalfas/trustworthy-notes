@@ -98,6 +98,24 @@ spec is being worked out (see the data-flow discussion / planned `tnotes` CLI +
 | `tests/test_normalize.py` · `test_notes.py` · `test_ingest.py` | Conformance: anchoring rule, §7 validity, and ingest layout classification | §6 · §7.1–§7.5 · §4.5/§4.6 · Wave-0 routing | built |
 | `tests/fixtures/notes.printed-p3.yaml` | Hand-built golden notes-set (printed p.3) | the whole model — the executable example the validators run against | built |
 
+### Packaging & out-of-pipeline surfaces (v0.2.0)
+
+These ship the tool as a self-contained Windows exe and add the
+user-facing-but-not-pipeline features. Each is tagged with its **trust domain**:
+*pipeline* (inside the extraction trust domain) or *out-of-pipeline* (an isolated
+module the pipeline never imports — see Invariant 5).
+
+| Module / file | Role | Trust domain | Status / ADR |
+|---|---|---|---|
+| `src/trustworthy_notes/__main__.py` | Frozen-exe + `python -m` entry point; invokes the same typer app | pipeline (entry) | built — frozen-packaging surface (ADR-002) |
+| `tn.spec` (+ build deps) | PyInstaller one-file spec; bundles fonts/schemas/pdfminer cmaps, bakes the build stamp | pipeline (packaging) | built (ADR-002) |
+| `src/trustworthy_notes/resources.py` | The single frozen-aware resource seam — `importlib.resources.as_file()` for any consumer needing a real path (fonts, schema); fonts → process-lifetime temp dir | pipeline (cross-cutting) | built (ADR-002) |
+| `src/trustworthy_notes/build.py` | Build identity (`<version>+<stamp>`); the frozen substitute for source-hashing in the output cache | pipeline (cross-cutting) | built (ADR-002) |
+| `src/trustworthy_notes/updater.py` | `tnotes upgrade` + launch-time update nudge; GitHub+TLS trust root, checksum-as-corruption-guard, verify-launchable-before fail-safe in-place swap | **out-of-pipeline** (self-update trust domain) | built; Windows swap validated on real HW (ADR-001) |
+| `src/trustworthy_notes/feedback.py` | `tnotes feedback`; private-repo upload via out-of-band fine-grained PAT, consent gate, local-file fallback | **out-of-pipeline** (feedback / exfiltration trust domain) | built (ADR-003) |
+| `src/trustworthy_notes/winlaunch.py` | Windowless-launch (double-click / drag) detection, pause-to-read, first-run key onboarding | **out-of-pipeline** (Windows UX) | built; Windows path validated on real HW |
+| `src/trustworthy_notes/pricing.py` | Per-model cost **estimate** from provider usage × hardcoded `PRICING_AS_OF` rate table; non-authoritative (leaf, no pipeline imports) | pipeline (leaf, advisory figure) | built (ADR-004) |
+
 ---
 
 ## 3. Methodology → implementation traceability matrix
@@ -139,10 +157,31 @@ Every methodology section, and where it lives in the implementation.
    Evidence `excerpt` is verbatim. Quotes never live in `text` (§4.2, §6).
 4. **No dead code** — every module on the live surface is used; planned
    structures are added when first needed, not before.
+5. **Network posture** — the pipeline commands (Waves 0–4) touch the network
+   **only** for the Anthropic extract calls they already make. Everything that
+   reaches the network for any other reason — version-check / upgrade
+   (`updater`), feedback (`feedback`), the launch-time update nudge, and the
+   windowless-launch onboarding (`winlaunch`) — is an **isolated module the
+   pipeline never imports**. The dependency arrows are `cli → updater`,
+   `cli → feedback`, `cli → winlaunch`, never `pipeline → *`. This keeps Waves
+   0–4 runnable offline with no second-credential surface, and keeps the
+   self-update / feedback trust domains out of the extraction trust domain
+   (ADR-001 distribution & self-upgrade trust model; ADR-003 feedback
+   data-exfiltration boundary).
 
 ---
 
 ## 5. What is built, reserved, and planned
+
+> **Release status (v0.2.0):** the full extraction pipeline (Waves 0–4) is
+> implemented, and v0.2.0 packages it as a **self-contained Windows `tnotes.exe`**
+> with **in-place auto-update** (`tnotes upgrade` + a launch nudge) and a
+> **no-terminal (double-click / drag) launch** path. The packaging and
+> out-of-pipeline surfaces are listed in §2's "Packaging & out-of-pipeline
+> surfaces" table and their foundational decisions in
+> `docs/architecture/decisions/` (ADR-001…004). The per-wave maturity below
+> still applies to the *pipeline internals* (e.g. figure/table evidence remains
+> reserved).
 
 - **Built:** Wave 0 ingest incl. **layout classification + routing** (text
   columns / table rows / figure captions+regions / blank); running-header
@@ -243,6 +282,11 @@ links statements to it by label match.
 ## 7. References
 
 - `METHODOLOGY.md` — the source of truth this document maps from.
+- `docs/architecture/decisions/` — the application's ADRs. ADR-001 (distribution
+  & self-upgrade trust model), ADR-002 (frozen-build correctness), ADR-003
+  (feedback data-exfiltration boundary), ADR-004 (cost estimate is
+  non-authoritative) own the rationale for the v0.2.0 packaging and
+  out-of-pipeline surfaces (§2) and the network-posture invariant (§4).
 - `.pkit/scratchpad/active/2026-06-14-context-strategy.md` — per-page context
   strategy + the page-vs-accretion decision.
 - `.pkit/scratchpad/active/2026-06-13-evidence-summarizer-design.md` — earlier
