@@ -300,3 +300,55 @@ def test_run_consent_preview_lists_bundle_files(tmp_path, monkeypatch):
     # The preview must disclose the verbatim-excerpt bundle file by name + warn.
     assert "page-0011.notes.yaml" in seen["preview"]
     assert "VERBATIM" in seen["preview"]
+
+
+# --- listing existing issues (read-only inbound, issue #41) ---------------------
+
+
+def _github_with_get(payload, *, raises: bool = False):
+    """A GitHubClient whose injected get returns ``payload`` (or raises FeedbackError)."""
+    def _get(url, tok):
+        if raises:
+            raise feedback.FeedbackError("could not reach the feedback repo: offline")
+        return payload
+    return feedback.GitHubClient(token="tok", get=_get)
+
+
+def test_list_recent_issues_parses_get():
+    gh = _github_with_get([
+        {"number": 7, "title": "export looks blank", "state": "open"},
+        {"number": 4, "title": "page 3 garbled", "state": "open"},
+    ])
+    listing = feedback.list_recent_issues("o/r", "tok", github_client=gh)
+    assert listing.available is True
+    assert [(i.number, i.title, i.state) for i in listing.issues] == [
+        (7, "export looks blank", "open"),
+        (4, "page 3 garbled", "open"),
+    ]
+
+
+def test_list_recent_issues_skips_pull_requests():
+    gh = _github_with_get([
+        {"number": 9, "title": "a real report", "state": "open"},
+        {"number": 8, "title": "a PR not a report", "state": "open", "pull_request": {"url": "x"}},
+    ])
+    listing = feedback.list_recent_issues("o/r", "tok", github_client=gh)
+    assert [i.number for i in listing.issues] == [9]
+
+
+def test_list_recent_issues_unconfigured_is_unavailable():
+    assert feedback.list_recent_issues(None, "tok").available is False
+    assert feedback.list_recent_issues("o/r", None).available is False
+
+
+def test_list_recent_issues_get_raising_is_unavailable_not_raised():
+    gh = _github_with_get(None, raises=True)
+    listing = feedback.list_recent_issues("o/r", "tok", github_client=gh)
+    assert listing.available is False
+    assert "offline" in listing.reason
+
+
+def test_list_recent_issues_unexpected_shape_is_unavailable():
+    gh = _github_with_get({"message": "Not Found"})  # a dict, not the expected array
+    listing = feedback.list_recent_issues("o/r", "tok", github_client=gh)
+    assert listing.available is False

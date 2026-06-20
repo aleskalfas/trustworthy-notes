@@ -1513,6 +1513,23 @@ def feedback(
         if not onboarding.ensure_api_key():
             winlaunch.pause()
             raise typer.Exit(1)
+        # Show what's already been reported so the user can avoid duplicates. This is
+        # a read-only inbound call (per ADR-003): no consent gate, and it degrades to
+        # a clear line on any failure rather than crashing the windowless flow.
+        listing = feedbackmod.list_recent_issues(
+            config.get_feedback_repo(), config.get_feedback_token()
+        )
+        if not listing.available:
+            typer.echo(
+                "\nCouldn't reach the feedback repo to list existing reports — "
+                "you can still send this one."
+            )
+        elif not listing.issues:
+            typer.echo("\nNo problems reported yet — yours would be the first.")
+        else:
+            typer.echo("\nAlready reported:")
+            for it in listing.issues:
+                typer.echo(f"  #{it.number} [{it.state}] {it.title}")
         if doc is not None:
             typer.echo(f"\nReporting a problem with: {doc.name}")
         else:

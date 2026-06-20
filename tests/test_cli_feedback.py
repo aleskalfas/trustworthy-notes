@@ -54,6 +54,15 @@ def _stub_run_feedback(monkeypatch, seen: dict, *, drive_consent: bool = False):
     monkeypatch.setattr(feedbackmod, "run_feedback", fake)
 
 
+def _stub_list_issues(monkeypatch, listing=None):
+    """Stub the read-only issue listing so the windowless flow never hits the network.
+
+    Defaults to an empty, available listing; pass a listing to assert the display.
+    """
+    listing = listing or feedbackmod.IssueListing(available=True, issues=[])
+    monkeypatch.setattr(feedbackmod, "list_recent_issues", lambda *a, **k: listing)
+
+
 # --- positional disambiguation (terminal usage) -----------------------------------
 
 
@@ -145,6 +154,7 @@ def test_windowless_prompts_for_message_runs_and_pauses(tmp_path, monkeypatch):
     monkeypatch.setattr(winlaunch, "pause", lambda *a, **k: paused.__setitem__("n", paused["n"] + 1))
     seen: dict = {}
     _stub_run_feedback(monkeypatch, seen)
+    _stub_list_issues(monkeypatch)
 
     # The double-click user has no -m flag: the message comes from the prompt.
     res = runner.invoke(cli.app, ["feedback"], input="the book came out blank\n")
@@ -165,6 +175,7 @@ def test_windowless_dropped_pdf_reports_against_it(tmp_path, monkeypatch):
     pdf.write_bytes(b"%PDF-1.4 stub")
     seen: dict = {}
     _stub_run_feedback(monkeypatch, seen)
+    _stub_list_issues(monkeypatch)
 
     res = runner.invoke(cli.app, ["feedback", str(pdf)], input="page 7 wrong\n")
     assert res.exit_code == 0, res.output
@@ -181,6 +192,7 @@ def test_windowless_reaches_consent_gate_before_upload(tmp_path, monkeypatch):
     monkeypatch.setattr(winlaunch, "pause", lambda *a, **k: None)
     seen: dict = {}
     _stub_run_feedback(monkeypatch, seen, drive_consent=True)
+    _stub_list_issues(monkeypatch)
 
     # The stub invokes the confirm() callback (the consent gate) — which the cli
     # wires to typer.confirm; a "y\n" after the message answers it.
@@ -214,6 +226,7 @@ def test_windowless_empty_message_exits_without_running(tmp_path, monkeypatch):
     monkeypatch.setattr(winlaunch, "pause", lambda *a, **k: paused.__setitem__("n", paused["n"] + 1))
     called = {"run": False}
     monkeypatch.setattr(feedbackmod, "run_feedback", lambda *a, **k: called.__setitem__("run", True))
+    _stub_list_issues(monkeypatch)
 
     res = runner.invoke(cli.app, ["feedback"], input="\n")  # empty message
     assert res.exit_code == 1
@@ -241,3 +254,61 @@ def test_non_windowless_does_not_pause(tmp_path, monkeypatch):
     assert "general problem" not in res.output
     assert "Reporting a problem with" not in res.output
     assert seen["message"] == "a problem"
+
+
+# --- issue listing in the windowless flow (issue #41) ----------------------------
+
+
+def test_windowless_shows_already_reported_issues(tmp_path, monkeypatch):
+    _no_startup_nudge(monkeypatch)
+    _windowless(monkeypatch, True)
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+    monkeypatch.setattr(cli.config, "get_reporter_name", lambda: "Jana")
+    monkeypatch.setattr(winlaunch, "pause", lambda *a, **k: None)
+    _stub_run_feedback(monkeypatch, {})
+    _stub_list_issues(monkeypatch, feedbackmod.IssueListing(
+        available=True,
+        issues=[
+            feedbackmod.IssueSummary(number=7, title="export looks blank", state="open"),
+            feedbackmod.IssueSummary(number=4, title="page 3 garbled", state="open"),
+        ],
+    ))
+
+    res = runner.invoke(cli.app, ["feedback"], input="another problem\n")
+    assert res.exit_code == 0, res.output
+    assert "Already reported:" in res.output
+    assert "#7 [open] export looks blank" in res.output
+    assert "#4 [open] page 3 garbled" in res.output
+
+
+def test_windowless_listing_unavailable_shows_fallback_line(tmp_path, monkeypatch):
+    _no_startup_nudge(monkeypatch)
+    _windowless(monkeypatch, True)
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+    monkeypatch.setattr(cli.config, "get_reporter_name", lambda: "Jana")
+    monkeypatch.setattr(winlaunch, "pause", lambda *a, **k: None)
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+    _stub_list_issues(monkeypatch, feedbackmod.IssueListing(
+        available=False, reason="could not reach the feedback repo: offline",
+    ))
+
+    # Listing failure must not crash the flow — the report still goes through.
+    res = runner.invoke(cli.app, ["feedback"], input="still works\n")
+    assert res.exit_code == 0, res.output
+    assert "Couldn't reach the feedback repo to list existing reports" in res.output
+    assert seen["message"] == "still works"
+
+
+def test_windowless_no_issues_yet_shows_first_line(tmp_path, monkeypatch):
+    _no_startup_nudge(monkeypatch)
+    _windowless(monkeypatch, True)
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+    monkeypatch.setattr(cli.config, "get_reporter_name", lambda: "Jana")
+    monkeypatch.setattr(winlaunch, "pause", lambda *a, **k: None)
+    _stub_run_feedback(monkeypatch, {})
+    _stub_list_issues(monkeypatch, feedbackmod.IssueListing(available=True, issues=[]))
+
+    res = runner.invoke(cli.app, ["feedback"], input="the very first\n")
+    assert res.exit_code == 0, res.output
+    assert "yours would be the first" in res.output
