@@ -9,3 +9,4 @@ Foundational, cross-cutting decisions for the **trustworthy-notes** application 
 | [ADR-003](ADR-003-feedback-data-exfiltration-boundary.md) | Feedback data-exfiltration boundary |
 | [ADR-004](ADR-004-cost-estimate-is-non-authoritative.md) | Cost estimate is a convenience figure, not an accounting record |
 | [ADR-005](ADR-005-windows-shortcut-os-integration-trust.md) | Windows shortcut and OS-integration trust posture |
+| [ADR-006](ADR-006-page-identity-and-locator-resolution.md) | Page identity and locator resolution |
