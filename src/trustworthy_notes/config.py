@@ -68,6 +68,12 @@ def normalise_feedback_repo(raw: str) -> str:
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_EFFORT = "low"
 
+# Built-in default feedback repo (#52). The repo name is NOT a secret — only the
+# token is (ADR-003's bright line), and the token is never defaulted or baked in.
+# Defaulting the repo here means feedback works with only a token, no repo setup
+# by the maintainer or the user. An explicit config value still overrides it.
+DEFAULT_FEEDBACK_REPO = "aleskalfas/trustworthy-notes-feedback"
+
 
 def config_dir() -> Path:
     override = os.environ.get("TN_CONFIG_DIR")
@@ -163,13 +169,17 @@ def resolve_effort(flag: Optional[str]) -> str:
     return cfg_effort if cfg_effort is not None else DEFAULT_EFFORT
 
 
-def get_feedback_repo() -> Optional[str]:
-    """The private feedback repo as ``owner/name``, or None if unset.
+def get_feedback_repo() -> str:
+    """The private feedback repo as ``owner/name`` — a configured value or the default.
 
-    Where ``tnotes feedback`` files issues + commits repro bundles. The repo is the
-    maintainer's manual setup; absent here, feedback falls back to a local file.
+    Where ``tnotes feedback`` files issues + commits repro bundles. Falls back to the
+    built-in :data:`DEFAULT_FEEDBACK_REPO` when nothing is configured (#52), so the
+    repo needs no setup — only the token does. An explicit config value overrides it.
+    The repo name is not a secret; the token is the thing kept out of the binary
+    (ADR-003). Normalised on read so any value — the default, a freshly-set one, or
+    a pre-#50 config dirtied with a URL — comes back as clean ``owner/name``.
     """
-    return load().get("feedback_repo") or None
+    return normalise_feedback_repo(load().get("feedback_repo") or DEFAULT_FEEDBACK_REPO)
 
 
 def set_feedback_repo(repo: str) -> None:

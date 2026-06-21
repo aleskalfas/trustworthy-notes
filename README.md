@@ -32,18 +32,15 @@ key — **paste it (right-click in the window to paste) and press Enter**. The k
 is saved privately in your home folder, so you only do this once.
 
 It then offers an **optional feedback setup** so you can report a problem later
-without a terminal. If whoever gave you tnotes also gave you a private feedback
-repo and an access token, paste those when asked (and your name, so reports are
-attributed to you); otherwise **just press Enter to skip** — you can set it up
-later. The repo prompt asks for the `owner/name` form (e.g. `acme/tnotes-feedback`)
-but also accepts a pasted GitHub URL (`https://github.com/owner/name`) — it strips
-it back to `owner/name` for you. If whoever gave you tnotes **pre-seeded the repo**
-for you, it shows up as the default and you can just press Enter to keep it, so all
-you paste is the token. Once you've entered the details, tnotes **checks the
-connection** and tells you whether it worked (`Connected — feedback is ready.`); if
-it can't reach the repo it shows why and lets you re-enter the token, save anyway
-(handy if you're just offline), or skip — so you never end up with broken details
-saved as "ready". If the setup succeeds, tnotes offers to add a **"Send Feedback"
+without a terminal. Feedback works **out of the box** — the feedback repo is built
+in, so the only thing you supply is the **access token** that whoever gave you
+tnotes handed over. Paste it when asked (and your name, so reports are attributed
+to you); otherwise **just press Enter to skip** — you can set it up later. Once
+you've pasted the token, tnotes **checks the connection** and tells you whether it
+worked (`Connected — feedback is ready.`); if it can't reach the repo it shows why
+and lets you re-enter the token (or point at a different repo), save anyway (handy
+if you're just offline), or skip — so you never end up with broken details saved as
+"ready". If the setup succeeds, tnotes offers to add a **"Send Feedback"
 shortcut to your Desktop**; answer **Y** and a shortcut appears that files a report
 in one double-click (it keeps working across upgrades). Everything you paste is
 saved privately in your home folder, never in the repo or the exe.
@@ -371,24 +368,28 @@ configured, offline, an expired token, or you decline — it saves the report an
 bundle to a local `feedback-<timestamp>.txt` and tells you where, so feedback is
 never lost.
 
-The private repo and its token are the maintainer's setup, delivered out of band
-(never baked into the binary):
+The feedback repo is **built in**, so feedback works out of the box and the only
+thing you need to supply is the token (delivered out of band, never baked into the
+binary):
 
 ```
-tnotes config set-feedback-repo owner/tnotes-feedback   # the private repo
 tnotes config set-feedback-token                        # paste the fine-grained PAT (hidden)
 tnotes config set-reporter-name "Your Name"             # optional; otherwise asked once
+tnotes config set-feedback-repo owner/tnotes-feedback   # optional; overrides the built-in repo
 ```
 
 The token is a fine-grained GitHub PAT scoped to that one private repo (Issues +
 Contents). It is stored in your local config, the same place as the Anthropic key —
-never committed, never inside the exe.
+never committed, never inside the exe. The repo name is not a secret and can be
+overridden with `set-feedback-repo` (e.g. to point at your own feedback repo); only
+the token is kept out of the binary.
 
-Tip for shipping to a non-technical Windows user: run `set-feedback-repo` on the
-machine before handing it over, so the first-run setup shows that repo as the
-default and the end user only has to paste the token. The first-run flow then
-verifies the connection before saving, so they get an immediate
-`Connected — feedback is ready.` (or a clear reason if the token is wrong).
+Tip for shipping to a non-technical Windows user: nothing to pre-seed — the repo is
+built in. The first-run setup names the built-in repo and asks only for the token,
+then verifies the connection before saving, so they get an immediate
+`Connected — feedback is ready.` (or a clear reason if the token is wrong). If you
+want feedback to land in a *different* repo, run `set-feedback-repo` on the machine
+before handing it over.
 
 ## Platform
 

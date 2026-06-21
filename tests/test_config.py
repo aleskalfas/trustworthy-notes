@@ -100,7 +100,9 @@ def test_resolve_effort_empty_flag_is_explicit_not_unset(cfg):
 
 
 def test_feedback_config_round_trips_and_is_isolated(cfg):
-    assert cfg.get_feedback_repo() is None
+    # The repo is no longer None when unset — it falls back to the built-in default
+    # (#52/#53), so feedback works with only a token. The token is never defaulted.
+    assert cfg.get_feedback_repo() == cfg.DEFAULT_FEEDBACK_REPO
     assert cfg.get_feedback_token() is None
     assert cfg.get_reporter_name() is None
     cfg.set_api_key("sk-keep")
@@ -112,6 +114,20 @@ def test_feedback_config_round_trips_and_is_isolated(cfg):
     assert cfg.get_reporter_name() == "Jana"
     # Feedback keys must not clobber the API key (shared config file).
     assert cfg.get_api_key() == "sk-keep"
+
+
+def test_feedback_repo_defaults_when_unset_token_does_not(cfg):
+    # #53: the repo always resolves to a clean owner/name — the built-in default
+    # when nothing is stored — so feedback needs only a token. The token, by
+    # contrast, is never defaulted: it stays None until explicitly set.
+    assert cfg.get_feedback_repo() == cfg.DEFAULT_FEEDBACK_REPO
+    assert cfg.get_feedback_token() is None
+
+
+def test_feedback_repo_explicit_value_overrides_default(cfg):
+    # #53: an explicitly stored repo wins over the built-in default.
+    cfg.set_feedback_repo("acme/override")
+    assert cfg.get_feedback_repo() == "acme/override"
 
 
 @pytest.mark.parametrize(
