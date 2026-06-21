@@ -239,6 +239,22 @@ def run(
         winlaunch.pause()
         raise typer.Exit(1)
 
+    # In the windowless drag/double-click flow there are no flags, so offer the one
+    # choice that changes the reading experience (issue #76): clean reading copy vs
+    # the cited copy ([s-N] markers + Notes & Sources). Enter keeps the clean default.
+    # Terminal runs never see this — they pass --cite explicitly. (If --cite was
+    # somehow already set, there's nothing to ask.)
+    if windowless and not cite:
+        try:
+            answer = input(
+                "\nClean reading copy, or a cited copy ([s-N] markers + sources)?\n"
+                "Press Enter for clean, or type 'c' for cited: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer in ("c", "cite", "cited"):
+            cite = True
+
     def log(msg: str) -> None:
         typer.echo(msg, err=True)
 
