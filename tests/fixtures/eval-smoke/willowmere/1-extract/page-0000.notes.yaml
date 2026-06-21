@@ -1,0 +1,48 @@
+schema_version: 1
+source:
+  document: willowmere
+  scope: page
+  page_index: 0
+  page_label: '1'
+terms: []
+evidence:
+  - id: e-1
+    kind: text
+    excerpt: >-
+      The village of Willowmere sits in a shallow valley where two streams meet.
+    source: body
+  - id: e-2
+    kind: text
+    excerpt: >-
+      Its oldest houses were built from grey river stone, and their roofs were
+      thatched with reed cut from the marsh each autumn.
+    source: body
+  - id: e-3
+    kind: text
+    excerpt: >-
+      A stone bridge, raised in the spring of 1842, still carries the lane across
+      the eastern stream.
+    source: body
+  - id: e-4
+    kind: text
+    excerpt: >-
+      The bridge date is recorded on a small plaque set into its northern wall.
+    source: footnote
+statements:
+  - id: s-location
+    type: background
+    text: Willowmere lies in a shallow valley at the meeting of two streams.
+    evidence:
+      - e-1
+  - id: s-construction
+    type: claim
+    text: The village's oldest houses used grey river stone walls and reed thatch.
+    evidence:
+      - e-2
+  - id: s-bridge
+    type: claim
+    text: A stone bridge built in 1842 still carries the lane over the eastern stream.
+    evidence:
+      - e-3
+      - e-4
+relations: []

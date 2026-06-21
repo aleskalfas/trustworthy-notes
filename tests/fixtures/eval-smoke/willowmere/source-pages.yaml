@@ -1,0 +1,13 @@
+# Self-authored, non-copyrighted source text for the floor-score smoke corpus.
+# A fictional place ("Willowmere") so nothing here is lifted from any real work.
+pages:
+  - page_index: 0
+    text: >-
+      The village of Willowmere sits in a shallow valley where two streams meet.
+      Its oldest houses were built from grey river stone, and their roofs were
+      thatched with reed cut from the marsh each autumn. A stone bridge, raised
+      in the spring of 1842, still carries the lane across the eastern stream.
+      The miller's family kept the only clock in the village for three
+      generations, and the harvest fair was held on the green every September.
+    footnotes: >-
+      The bridge date is recorded on a small plaque set into its northern wall.
