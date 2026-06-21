@@ -50,6 +50,12 @@ def test_set_get_effort_round_trip(cfg):
     assert cfg.get_effort() == "medium"
 
 
+def test_set_get_eval_corpus_dir_round_trip(cfg):
+    assert cfg.get_eval_corpus_dir() is None  # unset
+    cfg.set_eval_corpus_dir("/path/to/private/eval-corpus")
+    assert cfg.get_eval_corpus_dir() == "/path/to/private/eval-corpus"
+
+
 def test_effort_empty_string_is_a_real_value_not_unset(cfg):
     # '' means "this model has no effort knob" — distinct from unset (None).
     cfg.set_effort("")

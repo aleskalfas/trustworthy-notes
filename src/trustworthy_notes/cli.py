@@ -422,6 +422,20 @@ def config_set_reporter_name(
     typer.echo(f"Saved reporter name: {name} ({config.config_file()}).")
 
 
+@config_app.command("set-eval-corpus-dir", hidden=True)
+def config_set_eval_corpus_dir(
+    path: str = typer.Argument(..., help="Path to your private floor-score eval corpus.")
+):
+    """Point `tnotes eval` at your private corpus (maintainer-only, ADR-007).
+
+    The real corpus is verbatim copyrighted excerpts — private, config-pointed, NEVER
+    committed (ADR-007 inherits ADR-003). The path is not a secret; the corpus content
+    is, which is why it lives outside the repo. See docs/EVAL.md.
+    """
+    config.set_eval_corpus_dir(path)
+    typer.echo(f"Saved eval corpus dir: {path} ({config.config_file()}).")
+
+
 @config_app.command("show")
 def config_show():
     """Show the resolved default model and effort, and where each comes from."""
@@ -439,6 +453,7 @@ def config_show():
     typer.echo(f"feedback repo : {repo or 'not set'}")
     typer.echo(f"feedback token: {'set' if config.get_feedback_token() else 'not set (falls back to local file)'}")
     typer.echo(f"reporter name : {config.get_reporter_name() or 'not set (asked on first feedback)'}")
+    typer.echo(f"eval corpus   : {config.get_eval_corpus_dir() or 'not set (maintainer floor-score harness)'}")
     typer.echo("A --model/--effort flag on `tnotes extract` overrides these.")
 
 
@@ -1912,6 +1927,81 @@ def upgrade():
         typer.echo(f"tnotes upgrade: {exc}", err=True)
         raise typer.Exit(1)
     typer.echo(outcome.message)
+
+
+@app.command(name="eval", hidden=True)
+def eval_cmd(
+    corpus: Path = typer.Option(
+        None, "--corpus", "-c", file_okay=False,
+        help="Corpus dir to score (a dir of doc subfolders). "
+        "Defaults to the private corpus from `eval_corpus_dir` config.",
+    ),
+    json_out: Path = typer.Option(
+        None, "--json", file_okay=True, dir_okay=False,
+        help="Also write the fingerprinted score as JSON to this file (for comparing runs).",
+    ),
+):
+    """Maintainer instrument: score how well a corpus clears the mechanical floor.
+
+    The deterministic floor-score harness (ADR-007). It re-runs the real §7 checks —
+    verbatim-anchoring (§7.2), grounding (§7.1), referential integrity (§7.4),
+    schema validity (§7.5) — over a corpus of generated notes and reports a
+    fingerprinted, reproducible number, so a model/prompt change can be judged a
+    regression. This is an INSTRUMENT READING, NEVER A GATE: no correctness decision
+    depends on it, and it never touches the pipeline. The stochastic LLM judge is
+    deferred (ADR-007) — this is the floor only.
+
+    Point `--corpus` at a dir of doc subfolders, or set `eval_corpus_dir` in config
+    for your private corpus (verbatim copyrighted excerpts — kept out of the repo).
+    """
+    from . import eval as eval_mod
+
+    corpus_dir = corpus or config.get_eval_corpus_dir()
+    if not corpus_dir:
+        typer.echo(
+            "no corpus given — pass --corpus or set `eval_corpus_dir` "
+            "(`tnotes` reads it from config).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    corpus_path = Path(corpus_dir)
+    if not corpus_path.is_dir():
+        typer.echo(f"corpus dir not found: {corpus_path}", err=True)
+        raise typer.Exit(1)
+
+    score = eval_mod.score_corpus(corpus_path)
+    fp = score.fingerprint
+    agg = score.aggregate
+
+    typer.echo("=== tnotes floor-score (maintainer instrument — floor only; judge deferred per ADR-007) ===")
+    typer.echo("This is an instrument reading, NOT a gate. Compare runs only with matching fingerprints.")
+    typer.echo(
+        f"corpus: {fp.corpus_id}  (hash {fp.corpus_hash})  "
+        f"tool {fp.tool_version}  at {fp.generated_at}"
+    )
+    typer.echo("")
+    typer.echo(f"{'anchored':>10} {'grounded':>10} {'excerpts':>9} {'stmts':>7} {'ref':>4} {'schema':>6}  doc")
+    for d in score.docs:
+        c = d.counts
+        typer.echo(
+            f"{c.anchored_rate:>9.0%} {c.grounded_rate:>10.0%} "
+            f"{c.excerpts_anchored:>4}/{c.excerpts_total:<4} {c.statements_total:>7} "
+            f"{c.referential_problems:>4} {c.schema_problems:>6}  {d.doc_id}"
+        )
+    typer.echo("")
+    typer.echo(
+        f"AGGREGATE  anchored {agg.anchored_rate:.1%}  grounded {agg.grounded_rate:.1%}  "
+        f"({agg.excerpts_anchored}/{agg.excerpts_total} excerpts, {agg.statements_grounded}/{agg.statements_total} statements)"
+    )
+    if agg.referential_problems or agg.schema_problems:
+        typer.echo(
+            f"  floor problems: {agg.referential_problems} referential, {agg.schema_problems} schema"
+        )
+
+    if json_out is not None:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(eval_mod.to_json(score) + "\n", encoding="utf-8")
+        typer.echo(f"\n[wrote {json_out}]", err=True)
 
 
 if __name__ == "__main__":

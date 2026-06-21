@@ -241,6 +241,25 @@ def set_no_update_check(disabled: bool) -> None:
     save(cfg)
 
 
+def get_eval_corpus_dir() -> Optional[str]:
+    """The path to the private floor-score eval corpus, or None if unset (#83).
+
+    Where ``tnotes eval`` finds the maintainer's real corpus — verbatim copyrighted
+    excerpts, so it is private and config-pointed, NEVER committed (ADR-007 inherits
+    ADR-003's privacy stance). Absent, ``tnotes eval`` falls back to the public smoke
+    corpus or whatever ``--corpus`` supplies. The path is not a secret; the corpus
+    content is, which is why it lives outside the repo, pointed at from here.
+    """
+    return load().get("eval_corpus_dir") or None
+
+
+def set_eval_corpus_dir(path: str) -> None:
+    """Store the path to the private eval corpus (``eval_corpus_dir`` in the config)."""
+    cfg = load()
+    cfg["eval_corpus_dir"] = path
+    save(cfg)
+
+
 def auth_source() -> str:
     """Where tnotes will get Claude credentials: 'config' | 'env' | 'login' | 'none'."""
     if get_api_key():
