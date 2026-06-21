@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 from trustworthy_notes import feedback, workspace
 
@@ -52,6 +53,23 @@ def _labelled_notes_dir(doc: Path, index_to_label: dict[int, object]) -> Path:
             lines.append(f"  page_label: '{label}'")
         (extract / f"page-{i:04d}.notes.yaml").write_text(
             "\n".join(lines) + "\n", encoding="utf-8"
+        )
+    return extract
+
+
+def _excerpt_notes_dir(doc: Path, index_to_excerpts: dict[int, list[str]]) -> Path:
+    """Lay down notes carrying ``evidence[].excerpt`` (the verbatim source quotes).
+
+    Mirrors a real ``page-NNNN.notes.yaml`` closely enough for the #61 passage scan: a
+    top-level ``evidence`` list of items each with an ``excerpt``. Returns the extract
+    dir so a test can point :func:`feedback.resolve_passage` at it.
+    """
+    extract = workspace.extract_dir(workspace.work_dir(doc))
+    extract.mkdir(parents=True, exist_ok=True)
+    for i, excerpts in index_to_excerpts.items():
+        data = {"evidence": [{"id": f"e{n}", "excerpt": e} for n, e in enumerate(excerpts)]}
+        (extract / f"page-{i:04d}.notes.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True), encoding="utf-8"
         )
     return extract
 
@@ -226,6 +244,91 @@ def test_build_label_index_skips_unreadable_and_missing_dir(tmp_path):
     index = feedback.build_label_index(extract)
     assert index == {"12": {11}}  # the broken file is skipped, the scan still resolves
     assert feedback.build_label_index(tmp_path / "nope") == {}  # missing dir → empty
+
+
+# --- passage locator (issue #61) -----------------------------------------------
+
+
+def test_passage_matching_one_page_resolves_to_that_index(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    extract = _excerpt_notes_dir(
+        doc,
+        {
+            0: ["The cat sat on the mat."],
+            1: ["Something else entirely."],
+        },
+    )
+    res = feedback.resolve_passage(extract, "the cat sat on the mat")
+    assert res.matched is True
+    assert res.indices == {0}
+
+
+def test_passage_matching_several_pages_resolves_to_all(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    # The same phrase appears verbatim on two pages (e.g. a repeated epigraph).
+    extract = _excerpt_notes_dir(
+        doc,
+        {
+            2: ["A recurring motif of the work."],
+            5: ["A recurring motif of the work, restated."],
+            7: ["Nothing in common here."],
+        },
+    )
+    res = feedback.resolve_passage(extract, "A recurring motif of the work")
+    assert res.matched is True
+    assert res.indices == {2, 5}  # all matches, never silently one
+
+
+def test_passage_matching_none_is_a_clear_miss_not_whole_doc(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    extract = _excerpt_notes_dir(doc, {0: ["Only this text exists."]})
+    res = feedback.resolve_passage(extract, "a passage that appears nowhere")
+    assert res.matched is False
+    assert res.indices == set()  # empty, NOT None (which would widen to whole doc)
+
+
+def test_passage_match_is_whitespace_and_case_insensitive(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    # Stored excerpt has line breaks / double spaces; pasted text is lower-case, single-spaced.
+    extract = _excerpt_notes_dir(doc, {3: ["The   quick brown\nfox  jumps."]})
+    res = feedback.resolve_passage(extract, "the quick brown fox jumps.")
+    assert res.matched is True
+    assert res.indices == {3}
+
+
+def test_passage_match_either_direction(tmp_path):
+    """A pasted span longer than any single excerpt still matches when an excerpt is a
+    substring of it (the user pasted more than one stored quote's worth)."""
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    extract = _excerpt_notes_dir(doc, {4: ["jumps over the lazy dog"]})
+    res = feedback.resolve_passage(extract, "the quick brown fox jumps over the lazy dog today")
+    assert res.matched is True
+    assert res.indices == {4}
+
+
+def test_passage_blank_matches_nothing(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    extract = _excerpt_notes_dir(doc, {0: ["Some text."]})
+    res = feedback.resolve_passage(extract, "   ")
+    assert res.matched is False
+    assert res.indices == set()  # a blank passage must not match every page
+
+
+def test_passage_skips_unreadable_and_missing_dir(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    extract = _excerpt_notes_dir(doc, {0: ["findable passage"]})
+    (extract / "page-0099.notes.yaml").write_text(": not valid yaml :", encoding="utf-8")
+    res = feedback.resolve_passage(extract, "findable passage")
+    assert res.indices == {0}  # the broken file is skipped, the scan still resolves
+    miss = feedback.resolve_passage(tmp_path / "nope", "anything")
+    assert miss.matched is False and miss.indices == set()  # missing dir → clear miss
 
 
 # --- AI structuring + raw-text fallback ----------------------------------------
