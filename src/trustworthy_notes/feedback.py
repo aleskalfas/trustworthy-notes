@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import json
 import platform
+import re
 import urllib.error
 import urllib.request
 import zipfile
@@ -349,6 +350,7 @@ def file_issue(
     repo: str,
     client: GitHubClient,
     *,
+    reporter: Optional[str] = None,
     bundle: Optional[Path] = None,
     now: Optional[datetime] = None,
 ) -> str:
@@ -356,23 +358,71 @@ def file_issue(
 
     When a ``bundle`` is given, commit it into the repo first (Contents API — GitHub
     has no programmatic issue-attachment endpoint) and link it in the issue body. Any
-    failure raises ``FeedbackError`` for the caller to fall back from. ``now`` is
-    injectable so the committed bundle path (timestamped) is deterministic in tests.
+    failure of the *issue* itself raises ``FeedbackError`` for the caller to fall back
+    from. ``now`` is injectable so the committed bundle path (timestamped) is
+    deterministic in tests.
+
+    The title is prefixed with ``[<reporter>]`` (#55) so the maintainer can see who
+    reported what in the issue list, and a ``reporter:<slug>`` label is applied for
+    filtering. The label step is **best-effort** and runs *after* the issue is
+    created — a label failure never turns a filed report into a lost one.
     """
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%d-%H%M%S")
     body = report.body
     if bundle is not None:
         bundle_url = _commit_bundle(bundle, repo, client, stamp)
         body = f"{body}\n\n**Reproduction bundle:** {bundle_url}"
+    title = f"[{reporter}] {report.title}" if reporter else report.title
     created = client.post(
         f"{_GITHUB_API}/repos/{repo}/issues",
         client.token,
-        {"title": report.title, "body": body},
+        {"title": title, "body": body},
     )
     url = created.get("html_url")
     if not url:
         raise FeedbackError("GitHub did not return an issue URL")
+    if reporter:
+        _apply_reporter_label(repo, client, created.get("number"), reporter)
     return url
+
+
+def _reporter_label(reporter: str) -> str:
+    """A filterable label for a reporter: ``reporter:<slug>`` (lowercased, hyphenated)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", reporter.strip().lower()).strip("-")
+    return f"reporter:{slug or 'unknown'}"
+
+
+def _apply_reporter_label(
+    repo: str, client: GitHubClient, number: Optional[int], reporter: str
+) -> None:
+    """Best-effort: ensure the ``reporter:<slug>`` label exists and add it to the issue.
+
+    Attribution is a convenience, not part of the report's integrity (the title prefix
+    and the body's ``Reported by:`` already attribute it), so every failure here is
+    swallowed — a label problem must never lose a report that already filed. The issue
+    exists by the time this runs.
+    """
+    if number is None:
+        return
+    label = _reporter_label(reporter)
+    try:
+        # Create the label if it's new; a 422 'already exists' (or any create error)
+        # is fine — adding it below may still succeed.
+        try:
+            client.post(
+                f"{_GITHUB_API}/repos/{repo}/labels",
+                client.token,
+                {"name": label, "color": "c2e0c6"},
+            )
+        except FeedbackError:
+            pass
+        client.post(
+            f"{_GITHUB_API}/repos/{repo}/issues/{number}/labels",
+            client.token,
+            {"labels": [label]},
+        )
+    except Exception:
+        pass  # never let attribution break a filed report
 
 
 def _commit_bundle(bundle: Path, repo: str, client: GitHubClient, stamp: str) -> str:
@@ -620,7 +670,7 @@ def run_feedback(
 
     client = github_client or GitHubClient(token=token)
     try:
-        url = file_issue(report, repo, client, bundle=bundle_path, now=now)
+        url = file_issue(report, repo, client, reporter=reporter, bundle=bundle_path, now=now)
     except FeedbackError as exc:
         dest = write_local_fallback(report, diagnostics, bundle_path, fallback_dir, now=now)
         return FeedbackOutcome(
