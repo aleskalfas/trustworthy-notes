@@ -68,64 +68,50 @@ def ensure_api_key() -> bool:
 
 
 def setup_feedback() -> bool:
-    """Optional first-run step: capture the feedback credentials, no terminal needed.
+    """Optional first-run step: capture the feedback *token*, no terminal needed.
 
     Returns ``True`` when the feedback feature is now configured to file online (a
     repo + token are present after this call), ``False`` when the user skipped or
     gave too little. Skipping is the easy default — a user who isn't doing feedback
     just presses Enter at the first prompt and the step is over.
 
-    Why collect repo + token + name together in one optional step: ``tnotes
-    feedback`` can only file online when it has *both* the repo and the token (one
-    without the other still falls back to a local file), and the whole point of #39
-    is that a windowless user can be fully set up without ever opening a terminal.
-    So the three pieces that ``tnotes config set-feedback-*`` would otherwise set
-    by hand are gathered here in one pass. Each lands in the *same* place as those
-    commands (:func:`config.set_feedback_repo` / :func:`config.set_feedback_token`
-    / :func:`config.set_reporter_name`), so the two are interchangeable.
+    Token-only by design (#53). The repo now *always* exists — :func:`config.get_feedback_repo`
+    returns the built-in :data:`config.DEFAULT_FEEDBACK_REPO` (#52) when nothing is
+    configured, or an explicit override — so the only thing a non-technical user
+    needs to supply is the token. ``tnotes feedback`` files online when it has both
+    the (always-present) repo and the token; gating on the token alone is therefore
+    enough. The pieces land in the *same* place as ``tnotes config set-feedback-*``
+    (:func:`config.set_feedback_repo` / :func:`config.set_feedback_token` /
+    :func:`config.set_reporter_name`), so the two are interchangeable.
 
-    Three #47 refinements over the original one-shot capture:
+    Two refinements carry over:
 
-    * The repo prompt names the ``owner/name`` shape with an example and tolerates a
-      pasted GitHub URL (:func:`normalise_feedback_repo`), because a user typed
-      their own name into the field when it wasn't clear what it wanted.
-    * A repo already in config (e.g. the maintainer pre-seeded it with ``tnotes
-      config set-feedback-repo``) is offered as the default and accepted on Enter,
-      so the end user only has to paste the token. The default is *config-driven* —
-      no repo is ever hardcoded here (ADR-003).
-    * Before saving, the repo+token pair is verified with a read-only connection
-      check (:func:`feedback.list_recent_issues`, an inbound path with no consent
-      gate per ADR-003). Success reports "Connected"; failure reports the reason and
-      lets the user re-enter the token/repo, proceed anyway, or skip — we never save
-      a broken pair while claiming it is ready, but an offline-yet-correct setup
-      stays possible by explicit choice.
+    * The repo is verified against the token before saving with a read-only
+      connection check (:func:`feedback.list_recent_issues`, an inbound path with no
+      consent gate per ADR-003). Success reports "Connected"; failure reports the
+      reason and lets the user re-enter the token (and, via :func:`_prompt_repo`,
+      optionally a *different* repo — the URL-tolerant change-the-repo path lives in
+      that retry loop now), proceed anyway, or skip. We never save a broken pair
+      while claiming it is ready, but an offline-yet-correct setup stays possible by
+      explicit choice.
+    * The token prompt is plain ``input`` (not hidden), for the same paste-feedback
+      reason as the API key above.
 
-    The token prompt is plain ``input`` (not hidden), for the same paste-feedback
-    reason as the API key above. An already-configured repo+token short-circuits to
-    ``True`` without nagging.
+    An already-configured token short-circuits to ``True`` without nagging — the
+    repo is always present, so the token is the only thing left to gate on.
     """
-    if config.get_feedback_repo() and config.get_feedback_token():
+    if config.get_feedback_token():
         return True
-    repo_default = config.get_feedback_repo()
-    intro = (
+    repo = config.get_feedback_repo()
+    print(
         "\nOptional: set up feedback so you can report a problem with one click.\n"
-        "You'll need a private feedback repo and its access token from whoever\n"
-        "gave you tnotes. Press Enter to skip — you can always do this later.\n"
+        f"A feedback repo is already set up ({repo}); just paste its access token\n"
+        "below to finish, or press Enter to skip — you can always do this later.\n"
     )
-    if repo_default:
-        intro += (
-            f"\nA feedback repo is already set up ({repo_default}); just paste the\n"
-            "access token below to finish.\n"
-        )
-    print(intro)
     try:
-        repo = _prompt_repo(repo_default)
-        if not repo:
-            print("Skipped feedback setup.")
-            return False
         token = input("Feedback access token (right-click to paste): ").strip()
         if not token:
-            print("No token entered — skipping feedback setup. Run me again to finish it.")
+            print("Skipped feedback setup. Run me again when you have the token.")
             return False
         name = input("Your name (tagged onto reports), or Enter to skip: ").strip()
         repo, token, save = _verify_feedback_connection(repo, token)
