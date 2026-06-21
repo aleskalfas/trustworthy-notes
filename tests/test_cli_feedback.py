@@ -510,3 +510,153 @@ def test_windowless_no_issues_yet_shows_first_line(tmp_path, monkeypatch):
     res = runner.invoke(cli.app, ["feedback"], input="the very first\n")
     assert res.exit_code == 0, res.output
     assert "yours would be the first" in res.output
+
+
+# --- dragging the generated book (issue #62) -------------------------------------
+#
+# A user reports against the book she is reading by dragging <name>.tnotes.pdf onto
+# Send Feedback. The book name dropped the source extension (pipeline.book_path uses
+# input_path.stem), so the cli resolves the SOURCE's `.tnotes` notes dir by its sibling
+# and threads it through as `notes_dir` — the source-PDF drag is unchanged.
+
+
+def _source_with_book(tmp_path: Path, *, stem="Foo", ext=".pdf", pages_tag="", index_to_label=None):
+    """A source PDF + its populated `<source>.tnotes` notes dir + the generated book.
+
+    Mirrors the real layout: notes live in ``<stem><ext>.tnotes`` (work_dir of the
+    source), while the book beside them is ``<stem>[.pRANGE].tnotes.pdf`` (book_path,
+    which dropped the source extension). Returns ``(source, book)``.
+    """
+    source = tmp_path / f"{stem}{ext}"
+    source.write_bytes(b"%PDF-1.4 stub")
+    extract = workspace.extract_dir(workspace.work_dir(source))
+    extract.mkdir(parents=True, exist_ok=True)
+    for i, label in (index_to_label or {11: "12"}).items():
+        body = ["schema_version: 1", "source:", f"  page_index: {i}", "  scope: page"]
+        if label is not None:
+            body.append(f"  page_label: '{label}'")
+        (extract / f"page-{i:04d}.notes.yaml").write_text("\n".join(body) + "\n", encoding="utf-8")
+    book = tmp_path / f"{stem}{pages_tag}.tnotes.pdf"
+    book.write_bytes(b"%PDF-1.4 book")
+    return source, book
+
+
+# --- unit: book → notes-dir resolution at the cli edge ---------------------------
+
+
+def test_resolve_book_to_notes_dir_finds_sibling(tmp_path):
+    source, book = _source_with_book(tmp_path)
+    resolved = cli._resolve_book_to_notes_dir(book)
+    assert resolved == workspace.work_dir(source)  # Foo.pdf.tnotes
+
+
+def test_resolve_book_with_page_range_tag(tmp_path):
+    source, book = _source_with_book(tmp_path, pages_tag=".p1-30")
+    # Book Foo.p1-30.tnotes.pdf still resolves to Foo.pdf.tnotes (the tag is stripped).
+    assert cli._resolve_book_to_notes_dir(book) == workspace.work_dir(source)
+
+
+def test_resolve_book_no_sibling_raises_clear(tmp_path):
+    book = tmp_path / "Foo.tnotes.pdf"
+    book.write_bytes(b"%PDF-1.4 book")  # no Foo*.tnotes dir beside it
+    try:
+        cli._resolve_book_to_notes_dir(book)
+        assert False, "expected BookNotesNotFound"
+    except cli.BookNotesNotFound as exc:
+        assert "couldn't find the notes" in str(exc)
+
+
+def test_resolve_book_ambiguous_prefers_exact_extension_shape(tmp_path):
+    # Same title as both .pdf and .epub → two siblings sharing the "Foo" prefix.
+    for ext in (".pdf", ".epub"):
+        (workspace.work_dir(tmp_path / f"Foo{ext}")).mkdir(parents=True)
+    # Add a decoy that is NOT the exact <stem>.<ext>.tnotes shape (extra dot segment).
+    (tmp_path / "Foo.draft.v2.tnotes").mkdir()
+    book = tmp_path / "Foo.tnotes.pdf"
+    book.write_bytes(b"%PDF-1.4 book")
+    try:
+        cli._resolve_book_to_notes_dir(book)
+        assert False, "expected BookNotesNotFound on a genuine tie"
+    except cli.BookNotesNotFound as exc:
+        assert "several possible notes folders" in str(exc)
+
+
+def test_is_generated_book_only_for_tnotes_pdf(tmp_path):
+    assert cli._is_generated_book(Path("Foo.tnotes.pdf"))
+    assert cli._is_generated_book(Path("Foo.p1-30.tnotes.pdf"))
+    assert not cli._is_generated_book(Path("Foo.pdf"))  # source PDF
+    assert not cli._is_generated_book(Path("Foo.tnotes.md"))
+
+
+# --- integration: a dragged book flows the resolved notes through ----------------
+
+
+def test_windowless_dragged_book_resolves_notes_into_run(tmp_path, monkeypatch):
+    """Drag the BOOK: the resolved source notes dir reaches run_feedback as notes_dir."""
+    _windowless_doc_flow(monkeypatch)
+    source, book = _source_with_book(tmp_path, index_to_label={10: "11", 11: "12"})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # Drag the book, press Enter for the whole document, then the message.
+    res = runner.invoke(cli.app, ["feedback", str(book)], input="\nbook looks off\n")
+    assert res.exit_code == 0, res.output
+    assert seen["doc"] == book  # the dragged path stays as doc
+    assert seen["notes_dir"] == workspace.work_dir(source)  # but notes come from the source
+    assert seen["message"] == "book looks off"
+
+
+def test_windowless_dragged_book_picker_reads_resolved_notes(tmp_path, monkeypatch):
+    """The page picker scans the RESOLVED notes dir: a printed folio resolves there."""
+    _windowless_doc_flow(monkeypatch)
+    _, book = _source_with_book(tmp_path, index_to_label={10: "11", 11: "12", 12: "13"})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # [1] printed folio "12" → PDF index 11, scanned from the source notes, not <book>.tnotes.
+    res = runner.invoke(cli.app, ["feedback", str(book)], input="1\np.12\nthis page\n")
+    assert res.exit_code == 0, res.output
+    assert seen["page_indices"] == {11}
+
+
+def test_windowless_dragged_book_consent_preview_from_resolved_notes(tmp_path, monkeypatch):
+    """End-to-end with the REAL run_feedback: the consent preview lists the source notes."""
+    _windowless_doc_flow(monkeypatch)
+    monkeypatch.setattr(cli.config, "get_feedback_repo", lambda: "o/r")
+    monkeypatch.setattr(cli.config, "get_feedback_token", lambda: "tok")
+    monkeypatch.setattr(cli.config, "resolve_model", lambda _m: "model")
+    monkeypatch.setattr(cli.config, "get_api_key", lambda: None)  # raw-text, no network
+    _, book = _source_with_book(tmp_path, index_to_label={10: "11", 11: "12", 12: "13"})
+
+    # Pick p.12 → index 11; decline at the consent gate so nothing uploads.
+    res = runner.invoke(cli.app, ["feedback", str(book)], input="1\np.12\nbad page\nn\n")
+    assert res.exit_code == 0, res.output
+    assert "page-0011.notes.yaml" in res.output  # from the resolved source notes dir
+    assert "page-0010.notes.yaml" not in res.output
+
+
+def test_windowless_dragged_book_no_notes_is_clear_not_empty(tmp_path, monkeypatch):
+    """A book with no sibling notes dir is a hard stop — never a silent empty bundle."""
+    _windowless_doc_flow(monkeypatch)
+    book = tmp_path / "Orphan.tnotes.pdf"
+    book.write_bytes(b"%PDF-1.4 book")  # no Orphan*.tnotes beside it
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    res = runner.invoke(cli.app, ["feedback", str(book)])
+    assert res.exit_code == 1
+    assert "couldn't find the notes" in res.output
+    assert seen == {}  # never reached run_feedback
+
+
+def test_source_pdf_drag_unchanged_no_resolution(tmp_path, monkeypatch):
+    """Dragging the SOURCE PDF still works: no .tnotes.pdf suffix → no notes_dir override."""
+    _windowless_doc_flow(monkeypatch)
+    source, _ = _source_with_book(tmp_path)
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    res = runner.invoke(cli.app, ["feedback", str(source)], input="\nsource drag\n")
+    assert res.exit_code == 0, res.output
+    assert seen["doc"] == source
+    assert seen["notes_dir"] is None  # current behaviour: doc's own work dir resolves notes

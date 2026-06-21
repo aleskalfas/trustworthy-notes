@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import glob
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -1456,7 +1458,7 @@ class _PageScope:
         self.passage = passage
 
 
-def _pick_page_scope(doc: Path) -> _PageScope:
+def _pick_page_scope(doc: Path, notes_dir: Path | None = None) -> _PageScope:
     """The windowless 'how do you want to point at the problem?' picker (issue #60/#61).
 
     Shown after the dropped doc is confirmed and before the message prompt, only when
@@ -1468,6 +1470,11 @@ def _pick_page_scope(doc: Path) -> _PageScope:
     pasted passage is resolved against the on-disk notes, never by calling the pipeline
     (ADR-006).
 
+    ``notes_dir`` overrides where the notes live: a dragged generated book (issue #62)
+    resolves to the source's ``.tnotes`` dir at the cli edge, so the page/passage scan
+    reads that dir — not ``work_dir(doc)``, which for a book would be the empty
+    ``<book>.tnotes``. When None we fall back to the doc's own work dir (a source drag).
+
     The menu is data-driven (``_PAGE_SCOPE_OPTIONS``): each row is (key, menu text,
     resolver, prompt, is_passage). A passage row keeps the typed text and threads it to
     the report even on a no-match (where it falls back to the whole document); the other
@@ -1475,7 +1482,7 @@ def _pick_page_scope(doc: Path) -> _PageScope:
     """
     from . import feedback as feedbackmod
 
-    extract = workspace.extract_dir(workspace.work_dir(doc))
+    extract = workspace.extract_dir(workspace.work_dir(doc, notes_dir))
     while True:
         typer.echo("\nHow do you want to point at the problem?")
         for key, menu_text, _resolver, _prompt, _is_passage in _PAGE_SCOPE_OPTIONS:
@@ -1553,13 +1560,89 @@ _PAGE_SCOPE_OPTIONS: list[tuple] = [
 ]
 
 
+# A page-range tag the book filename may carry: ``.p1-30`` / ``.p14`` / ``.p14,16``
+# (see pipeline.page_range_tag). Stripped when recovering the source stem from a book
+# name, because the notes dir is named after the source, never the tagged book.
+_PAGE_RANGE_TAG = re.compile(r"\.p[0-9,\-]+$")
+
+# The generated book's suffix (see pipeline.book_path): ``<source-stem>[.pRANGE].tnotes.pdf``.
+_BOOK_SUFFIX = ".tnotes.pdf"
+
+
+class BookNotesNotFound(Exception):
+    """A dragged generated book had no resolvable ``.tnotes`` notes dir beside it.
+
+    Carries a user-facing message the cli surfaces verbatim — either "no notes dir
+    next to that book" or "several candidates, can't tell which". Either way we must
+    NOT proceed (a missing notes dir would silently bundle nothing — issue #62).
+    """
+
+
+def _is_generated_book(target: Path) -> bool:
+    """True if ``target`` looks like a generated book (``*.tnotes.pdf``), not a source PDF.
+
+    The one signal that a dragged file is the GENERATED book rather than the source the
+    book was made from: the ``.tnotes.pdf`` suffix pipeline.book_path stamps. A plain
+    ``Foo.pdf`` source drag fails this and flows through unchanged (issue #62).
+    """
+    return target.name.endswith(_BOOK_SUFFIX)
+
+
+def _resolve_book_to_notes_dir(book: Path) -> Path:
+    """Resolve a dragged generated book (``*.tnotes.pdf``) to the source's ``.tnotes`` dir.
+
+    Issue #62: a user reports against the book she is reading, but the bundle's notes
+    live in the *source's* ``<source-name>.tnotes/`` work dir. The book name is lossy —
+    ``pipeline.book_path`` builds it from ``input_path.stem`` (dropping the source
+    extension) plus an optional ``.pRANGE`` tag — so the source path can't be
+    reconstructed. Instead we recover the source *stem* and find the sibling work dir by
+    that prefix:
+
+      ``Foo.pdf`` → notes dir ``Foo.pdf.tnotes`` → book ``Foo.tnotes.pdf`` (or
+      ``Foo.p1-30.tnotes.pdf``). Strip ``.tnotes.pdf`` and any ``.pRANGE`` tag to get
+      ``Foo``, then glob the book's parent for ``Foo*.tnotes`` directories.
+
+    Because the extension was dropped, the match is a stem *prefix* and can be ambiguous
+    (``Foo.pdf.tnotes`` vs ``Foo.epub.tnotes``). One match wins; for several we prefer an
+    exact ``<stem>.<ext>.tnotes`` shape and otherwise raise; none raises. Raising
+    (``BookNotesNotFound``) rather than returning empty is deliberate — a silent empty
+    bundle is the bug #62 is about.
+    """
+    stem = book.name[: -len(_BOOK_SUFFIX)]  # drop ".tnotes.pdf"
+    stem = _PAGE_RANGE_TAG.sub("", stem)  # drop an optional ".p1-30"-style tag
+    # Escape the stem before globbing: a real title with a '[' (or other glob meta) in it
+    # must match literally, not as a character class.
+    candidates = sorted(
+        d for d in book.parent.glob(f"{glob.escape(stem)}*.tnotes") if d.is_dir()
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise BookNotesNotFound(
+            f"couldn't find the notes for {book.name} next to it — expected a "
+            f"{stem}.*.tnotes folder beside it (re-run tnotes on the source PDF first)."
+        )
+    # Several siblings share the stem prefix (e.g. the same title as .pdf and .epub).
+    # Prefer the exact `<stem>.<single-extension>.tnotes` shape; if that is still not
+    # unique, ask the user to point at the source rather than guess.
+    exact = [d for d in candidates if re.fullmatch(rf"{re.escape(stem)}\.[^.]+\.tnotes", d.name)]
+    if len(exact) == 1:
+        return exact[0]
+    names = ", ".join(d.name for d in candidates)
+    raise BookNotesNotFound(
+        f"found several possible notes folders next to {book.name} ({names}) — "
+        f"drag the source PDF instead of the book so there's no ambiguity."
+    )
+
+
 @app.command()
 def feedback(
     target: str = typer.Argument(
         None,
         help="Either a PDF path the problem is about, or your message text. A value that "
         "is an existing file is treated as the document (same as --doc); anything else "
-        "is the message. A Windows 'Send Feedback' shortcut delivers a dragged PDF here.",
+        "is the message. A Windows 'Send Feedback' shortcut delivers a dragged PDF here. "
+        "Dragging the generated book (<name>.tnotes.pdf) reports against its source notes.",
     ),
     message: str = typer.Option(
         None, "--message", "-m", help="Your message. Overrides a message given positionally."
@@ -1614,6 +1697,21 @@ def feedback(
     # An explicit --message wins over a positional message (the flag is the explicit ask).
     message = message or positional_message
 
+    # Issue #62: the user can drag the GENERATED book (<name>.tnotes.pdf) rather than the
+    # source PDF, to report against what she's reading. The book name dropped the source
+    # extension, so we don't reconstruct the source path — we resolve to the sibling
+    # `.tnotes` notes dir and pass it through as `notes_dir`. A source-PDF drag has no
+    # `.tnotes.pdf` suffix, so this branch is skipped and that path is unchanged. A book
+    # with no resolvable notes dir is a hard stop (not a silent empty bundle).
+    resolved_notes_dir: Path | None = None
+    if doc is not None and _is_generated_book(doc):
+        try:
+            resolved_notes_dir = _resolve_book_to_notes_dir(doc)
+        except BookNotesNotFound as exc:
+            typer.echo(f"feedback: {exc}", err=True)
+            winlaunch.pause()
+            raise typer.Exit(1)
+
     # Windowless launch (the "Send Feedback" shortcut: double-click or PDF drag,
     # issues #39/#40) — a bare console that closes on exit. Ensure the key before
     # anything, guide the user for the message a flag couldn't carry, and PAUSE at
@@ -1656,7 +1754,7 @@ def feedback(
             # finally-scoped one (ADR-003). No doc → no picker (nothing to scope).
             if pages is None:
                 try:
-                    scope = _pick_page_scope(doc)
+                    scope = _pick_page_scope(doc, resolved_notes_dir)
                     page_indices = scope.indices
                     pasted_passage = scope.passage
                 except (EOFError, KeyboardInterrupt):
@@ -1699,9 +1797,14 @@ def feedback(
     def log(msg: str) -> None:
         typer.echo(msg, err=True)
 
-    # The bundle and any local fallback land in the document's own .tnotes folder
-    # when a doc is given (keeps repro data beside its source), else the config dir.
-    fallback_dir = workspace.work_dir(doc) if doc else config.config_dir()
+    # The bundle and any local fallback land in the resolved .tnotes folder when a doc is
+    # given (keeps repro data beside the real notes), else the config dir. For a dragged
+    # book (issue #62) that is the source's notes dir we resolved above; for a source PDF
+    # it is the doc's own work dir.
+    if doc:
+        fallback_dir = workspace.work_dir(doc, resolved_notes_dir)
+    else:
+        fallback_dir = config.config_dir()
 
     outcome = feedbackmod.run_feedback(
         message,
@@ -1716,6 +1819,7 @@ def feedback(
         fallback_dir=fallback_dir,
         confirm=confirm,
         log=log,
+        notes_dir=resolved_notes_dir,
     )
 
     if outcome.filed:
