@@ -63,7 +63,10 @@ you can always read the result — or, if something went wrong, the error.
 
 **4. Send feedback when something looks wrong.** If you added the **"Send
 Feedback"** shortcut during setup, **drag the problem PDF onto it** to report
-against that document, or **double-click it** (no PDF) for a general report.
+against that document — you can drag **either the source PDF or the generated
+book** (`your.tnotes.pdf`); dragging the book reports against the same notes, so
+you can report straight from what you're reading. Or **double-click it** (no PDF)
+for a general report.
 Either way a window opens and guides you: it asks for your key the first time,
 and — when you dragged a PDF — lets you **point at the page that's wrong**:
 choose **the page number printed in the book** (e.g. `p.12`), **the document's
@@ -355,8 +358,11 @@ The single positional is smart about what you hand it: a value that is an
 **existing file** is taken as the document (`tnotes feedback data/Foo.pdf`), and
 anything else is your **message** (`tnotes feedback "the export crashed"`). That
 is what lets the Windows "Send Feedback" shortcut work — a dragged PDF arrives as
-exactly that positional. Use `-m/--message` and `--doc` to be explicit; if both a
-dropped file and `--doc` are given they must be the same document.
+exactly that positional. You can hand it **either the source PDF or the generated
+book** (`data/Foo.tnotes.pdf`): dragging the book resolves back to the source's
+notes beside it, so you report against the same thing either way. Use
+`-m/--message` and `--doc` to be explicit; if both a dropped file and `--doc` are
+given they must be the same document.
 
 It captures diagnostics (tool version, OS, your message), bundles the referenced
 document's `.tnotes` notes for the given page range (for reproduction), and uses
