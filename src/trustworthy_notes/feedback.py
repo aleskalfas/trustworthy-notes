@@ -246,6 +246,76 @@ def resolve_printed_page(extract_dir: Path, folio: str) -> PageResolution:
     return PageResolution(indices=indices, matched=bool(indices), label=f"p.{label}")
 
 
+def resolve_passage(extract_dir: Path, passage: str) -> PageResolution:
+    """Resolve a pasted source passage to the SET of pages whose excerpts contain it.
+
+    The #61 locator: the user pastes a sentence they actually see in the book, and we
+    find the page(s) whose stored verbatim ``evidence[].excerpt`` text matches it. Like
+    the printed-``p.N`` locator (ADR-006) this reads only the on-disk ``.tnotes`` notes
+    — inlined ``yaml.safe_load``, never a call into ``compose``/``ingest``/``extract``/
+    ``normalize``, which would invert the ``cli → feedback`` arrow (ADR-003).
+
+    The match is *best-effort* and deliberately tolerant: both sides are normalised by
+    :func:`_normalize_passage` (collapse whitespace, case-fold) and a page matches if the
+    passage is a substring of any of its excerpts OR an excerpt is a substring of the
+    passage — either direction, because the user may paste less than a whole excerpt or
+    a span that crosses two. A passage matching several pages returns all of them; an
+    empty result is a *clear miss* (``matched=False``, empty set), NOT a widen to the
+    whole document — the caller surfaces the miss and falls back only on an explicit ask
+    (ADR-006). A blank passage matches nothing rather than everything.
+    """
+    needle = _normalize_passage(passage)
+    if not needle:
+        return PageResolution(indices=set(), matched=False, label="pasted passage")
+    indices: set[int] = set()
+    if extract_dir.is_dir():
+        for notes_path in sorted(extract_dir.glob("page-*.notes.yaml")):
+            index = _page_index_of(notes_path)
+            if index is None:
+                continue
+            for excerpt in _excerpts_of(notes_path):
+                hay = _normalize_passage(excerpt)
+                if hay and (needle in hay or hay in needle):
+                    indices.add(index)
+                    break
+    return PageResolution(indices=indices, matched=bool(indices), label="pasted passage")
+
+
+def _normalize_passage(text: str) -> str:
+    """Lightly normalise a passage/excerpt for a robust match: case-fold + collapse
+    whitespace. A few lines on purpose — the pipeline's richer ``normalize`` is off
+    limits here (it would invert the ``cli → feedback`` arrow, ADR-003), and matching a
+    human-pasted line only needs to survive case and whitespace drift, not full
+    Unicode/diacritic folding."""
+    return " ".join(text.split()).casefold()
+
+
+def _excerpts_of(notes_path: Path) -> list[str]:
+    """The verbatim ``evidence[].excerpt`` strings stored in a notes file, or [].
+
+    Reads the same ``page-NNNN.notes.yaml`` the bundle ships, pulling each evidence
+    item's ``excerpt`` (the verbatim source quote, per ADR-006 / the notes schema). An
+    unreadable/unparseable file, or one with no evidence, yields an empty list — a
+    partial scan still matches the pages it could read, mirroring
+    :func:`build_label_index`."""
+    try:
+        data = yaml.safe_load(notes_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    evidence = data.get("evidence")
+    if not isinstance(evidence, list):
+        return []
+    out: list[str] = []
+    for item in evidence:
+        if isinstance(item, dict):
+            excerpt = item.get("excerpt")
+            if isinstance(excerpt, str) and excerpt.strip():
+                out.append(excerpt)
+    return out
+
+
 def build_label_index(extract_dir: Path) -> dict[str, set[int]]:
     """Map each stored printed folio to the set of PDF indices carrying it.
 

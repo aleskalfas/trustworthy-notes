@@ -340,6 +340,66 @@ def test_windowless_consent_preview_reflects_resolved_pages(tmp_path, monkeypatc
     assert "page-0012.notes.yaml" not in res.output
 
 
+# --- windowless passage picker (issue #61) ---------------------------------------
+
+
+def _doc_with_excerpt_notes(tmp_path: Path, index_to_excerpts: dict) -> Path:
+    """A PDF whose .tnotes notes carry ``evidence[].excerpt`` (the #61 passage scan)."""
+    import yaml
+
+    pdf = tmp_path / "Dropped.pdf"
+    pdf.write_bytes(b"%PDF-1.4 stub")
+    extract = workspace.extract_dir(workspace.work_dir(pdf))
+    extract.mkdir(parents=True, exist_ok=True)
+    for i, excerpts in index_to_excerpts.items():
+        data = {"evidence": [{"id": f"e{n}", "excerpt": e} for n, e in enumerate(excerpts)]}
+        (extract / f"page-{i:04d}.notes.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True), encoding="utf-8"
+        )
+    return pdf
+
+
+def test_picker_passage_match_scopes_bundle_and_quotes_in_report(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    pdf = _doc_with_excerpt_notes(
+        tmp_path, {10: ["The verdict was read aloud."], 11: ["Other content."]}
+    )
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # Choose [3] paste a passage, paste a phrase that lives on index 10, then the message.
+    res = runner.invoke(
+        cli.app,
+        ["feedback", str(pdf)],
+        input="3\nThe verdict was read aloud.\nthis quote is mangled\n",
+    )
+    assert res.exit_code == 0, res.output
+    assert seen["page_indices"] == {10}  # scoped to the matching page
+    # The pasted passage reaches the report body even though it matched a page.
+    assert "this quote is mangled" in seen["message"]
+    assert "The verdict was read aloud." in seen["message"]
+
+
+def test_picker_passage_no_match_falls_back_to_whole_doc_with_message(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    pdf = _doc_with_excerpt_notes(tmp_path, {10: ["Only this exists."]})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # Paste a passage that matches nothing → told clearly, say yes to whole-doc fallback.
+    res = runner.invoke(
+        cli.app,
+        ["feedback", str(pdf)],
+        input="3\na passage found nowhere\ny\nmsg\n",
+    )
+    assert res.exit_code == 0, res.output
+    assert "No page matches pasted passage" in res.output
+    assert "still be included in the report" in res.output  # never silent
+    assert seen["page_indices"] is None  # explicit fall back, never silently widened
+    # The passage is STILL in the report so the maintainer can find it by hand.
+    assert "a passage found nowhere" in seen["message"]
+
+
 def test_windowless_missing_key_exits_and_pauses(tmp_path, monkeypatch):
     _no_startup_nudge(monkeypatch)
     _windowless(monkeypatch, True)

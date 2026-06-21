@@ -1441,73 +1441,114 @@ def chapters(
     report.emit(workspace.compose_stage_dir(notes_dir, "chapter-map") / "chapters.txt", fp, force, render, label="tnotes chapters")
 
 
-def _pick_page_scope(doc: Path) -> set[int] | None:
-    """The windowless 'how do you want to point at the problem?' picker (issue #60).
+class _PageScope:
+    """The picker's outcome: the resolved bundle scope plus any pasted passage (#61).
+
+    ``indices`` None means "the whole document" (unscoped); a set is the resolved pages.
+    ``passage`` carries the verbatim text the user pasted via the #61 "paste the passage"
+    option, to be shown to the maintainer in the report REGARDLESS of whether it matched
+    a page — the match only scopes the bundle, it never replaces showing the quote. It is
+    None for every other locator (page numbers don't add a quote to the report).
+    """
+
+    def __init__(self, indices: set[int] | None, passage: str | None = None):
+        self.indices = indices
+        self.passage = passage
+
+
+def _pick_page_scope(doc: Path) -> _PageScope:
+    """The windowless 'how do you want to point at the problem?' picker (issue #60/#61).
 
     Shown after the dropped doc is confirmed and before the message prompt, only when
-    a document is attached. Returns the resolved PDF page indices to scope the bundle
-    to, or None for "the whole document" (the default). The resolution runs HERE, in
-    the feedback trust domain, so the caller can hand the result to ``run_feedback``
-    and the consent preview reflects the finally-scoped pages, not the raw input
-    (ADR-003). A printed ``p.N`` is resolved against the on-disk notes labels, never
-    by calling the pipeline (ADR-006).
+    a document is attached. Returns a :class:`_PageScope`: the resolved PDF page indices
+    to scope the bundle to (or None for "the whole document", the default), plus any
+    passage the #61 option pasted. The resolution runs HERE, in the feedback trust
+    domain, so the caller can hand the result to ``run_feedback`` and the consent preview
+    reflects the finally-scoped pages, not the raw input (ADR-003). A printed ``p.N`` or a
+    pasted passage is resolved against the on-disk notes, never by calling the pipeline
+    (ADR-006).
 
-    The menu is data-driven (``_PAGE_SCOPE_OPTIONS``) so issue #61's "paste the
-    passage" option slots in as one more row + resolver, with no change to this loop.
+    The menu is data-driven (``_PAGE_SCOPE_OPTIONS``): each row is (key, menu text,
+    resolver, prompt, is_passage). A passage row keeps the typed text and threads it to
+    the report even on a no-match (where it falls back to the whole document); the other
+    rows discard the typed value once it is resolved to indices.
     """
     from . import feedback as feedbackmod
 
     extract = workspace.extract_dir(workspace.work_dir(doc))
     while True:
         typer.echo("\nHow do you want to point at the problem?")
-        for key, menu_text, _resolver, _prompt in _PAGE_SCOPE_OPTIONS:
+        for key, menu_text, _resolver, _prompt, _is_passage in _PAGE_SCOPE_OPTIONS:
             typer.echo(f"  [{key}] {menu_text}")
         typer.echo("  [Enter] The whole document")
         choice = input("Choose: ").strip()
         if not choice:
-            return None  # explicit whole-document
+            return _PageScope(None)  # explicit whole-document
         option = next((o for o in _PAGE_SCOPE_OPTIONS if o[0] == choice), None)
         if option is None:
             typer.echo("Please choose one of the listed options.")
             continue
-        _key, _menu_text, resolver, number_prompt = option
-        number = input(number_prompt).strip()
-        resolution = resolver(feedbackmod, extract, number)
+        _key, _menu_text, resolver, prompt, is_passage = option
+        typed = input(prompt).strip()
+        # A pasted passage is always carried into the report, match or no match (#61);
+        # a page-number locator adds no quote.
+        passage = typed if is_passage else None
+        resolution = resolver(feedbackmod, extract, typed)
         if resolution.is_whole_document:
-            return None
+            return _PageScope(None, passage)
         if resolution.matched:
-            return resolution.indices
+            return _PageScope(resolution.indices, passage)
         # Clear miss: never silently widen (ADR-006). Let the user re-enter or fall
-        # back to the whole document by an explicit choice.
+        # back to the whole document by an explicit choice. A pasted passage still
+        # reaches the report on that fallback, so the maintainer can find it by hand.
         typer.echo(f"\nNo page matches {resolution.label}.")
+        if is_passage:
+            typer.echo(
+                "Your pasted passage will still be included in the report so the "
+                "maintainer can find it."
+            )
         if typer.confirm("Send the whole document instead?", default=False):
-            return None
+            return _PageScope(None, passage)
         # else loop back to the menu so they can try another locator/number
 
 
-def _resolve_printed(feedbackmod, extract: Path, number: str):
-    return feedbackmod.resolve_printed_page(extract, number)
+def _resolve_printed(feedbackmod, extract: Path, typed: str):
+    return feedbackmod.resolve_printed_page(extract, typed)
 
 
-def _resolve_document_page(feedbackmod, extract: Path, number: str):
-    return feedbackmod.resolve_document_page(number)
+def _resolve_document_page(feedbackmod, extract: Path, typed: str):
+    return feedbackmod.resolve_document_page(typed)
 
 
-# The picker rows: (menu key, menu text, resolver, number-prompt). Data-driven so
-# issue #61's "paste the passage" locator is added as one more row + resolver here,
-# without touching the picker loop. Each resolver returns a ``PageResolution``.
+def _resolve_passage(feedbackmod, extract: Path, typed: str):
+    return feedbackmod.resolve_passage(extract, typed)
+
+
+# The picker rows: (menu key, menu text, resolver, prompt, is_passage). Data-driven so
+# issue #61's "paste the passage" locator is just one more row. Each resolver returns a
+# ``PageResolution``; ``is_passage`` marks the row whose typed text is also kept for the
+# report (the quote), not only resolved to a bundle scope.
 _PAGE_SCOPE_OPTIONS: list[tuple] = [
     (
         "1",
         "By the page number shown in the book (e.g. p.12)",
         _resolve_printed,
         "The page number shown in the book (e.g. 12): ",
+        False,
     ),
     (
         "2",
         "By the document's page number",
         _resolve_document_page,
         "The document's page number (e.g. 12 or 10-14): ",
+        False,
+    ),
+    (
+        "3",
+        "By pasting a passage from the page",
+        _resolve_passage,
+        "Paste the passage (a sentence or phrase from the page): ",
+        True,
     ),
 ]
 
@@ -1583,6 +1624,9 @@ def feedback(
     # picker scoping": the terminal ``--pages`` flag (below) still scopes directly,
     # and a general/no-doc report stays unscoped.
     page_indices: set[int] | None = None
+    # A passage the user pasted via the #61 picker option, appended to the message so
+    # the maintainer always sees the quote — independent of whether it scoped the bundle.
+    pasted_passage: str | None = None
     windowless = winlaunch.is_windowless_launch()
     if windowless:
         if not onboarding.ensure_api_key():
@@ -1612,7 +1656,9 @@ def feedback(
             # finally-scoped one (ADR-003). No doc → no picker (nothing to scope).
             if pages is None:
                 try:
-                    page_indices = _pick_page_scope(doc)
+                    scope = _pick_page_scope(doc)
+                    page_indices = scope.indices
+                    pasted_passage = scope.passage
                 except (EOFError, KeyboardInterrupt):
                     page_indices = None
         else:
@@ -1631,6 +1677,12 @@ def feedback(
         typer.echo("No message entered — nothing to report.", err=True)
         winlaunch.pause()
         raise typer.Exit(1)
+
+    # The pasted passage (#61) is always carried into the report body so the maintainer
+    # can find the offending passage regardless of any bundle match — the match only
+    # scopes the bundle, it never replaces showing the quote.
+    if pasted_passage:
+        message = f"{message}\n\nPassage: {pasted_passage}"
 
     # Reporter name: asked once, then remembered (every report is tagged with it,
     # because the PAT authors as the maintainer's account, not the user's).
