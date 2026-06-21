@@ -17,9 +17,23 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from trustworthy_notes import cli, feedback as feedbackmod, onboarding, winlaunch
+from trustworthy_notes import cli, feedback as feedbackmod, onboarding, winlaunch, workspace
 
 runner = CliRunner()
+
+
+def _doc_with_labelled_notes(tmp_path: Path, index_to_label: dict) -> Path:
+    """A PDF whose .tnotes extract dir carries page_label-bearing notes (#60 picker)."""
+    pdf = tmp_path / "Dropped.pdf"
+    pdf.write_bytes(b"%PDF-1.4 stub")
+    extract = workspace.extract_dir(workspace.work_dir(pdf))
+    extract.mkdir(parents=True, exist_ok=True)
+    for i, label in index_to_label.items():
+        body = ["schema_version: 1", "source:", f"  page_index: {i}", "  scope: page"]
+        if label is not None:
+            body.append(f"  page_label: '{label}'")
+        (extract / f"page-{i:04d}.notes.yaml").write_text("\n".join(body) + "\n", encoding="utf-8")
+    return pdf
 
 
 def _windowless(monkeypatch, value: bool):
@@ -177,11 +191,15 @@ def test_windowless_dropped_pdf_reports_against_it(tmp_path, monkeypatch):
     _stub_run_feedback(monkeypatch, seen)
     _stub_list_issues(monkeypatch)
 
-    res = runner.invoke(cli.app, ["feedback", str(pdf)], input="page 7 wrong\n")
+    # A dropped doc now shows the page-scope picker (#60) before the message prompt;
+    # an empty choice (just Enter) means "the whole document", then the message.
+    res = runner.invoke(cli.app, ["feedback", str(pdf)], input="\npage 7 wrong\n")
     assert res.exit_code == 0, res.output
     assert seen["doc"] == pdf
     assert seen["message"] == "page 7 wrong"
+    assert seen["page_indices"] is None  # whole document
     assert "Dropped.pdf" in res.output  # confirmed the dropped doc to the user
+    assert "How do you want to point at the problem?" in res.output
 
 
 def test_windowless_reaches_consent_gate_before_upload(tmp_path, monkeypatch):
@@ -200,6 +218,126 @@ def test_windowless_reaches_consent_gate_before_upload(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
     assert "PREVIEW-TEXT" in res.output  # the consent preview was shown
     assert seen["consented"] is True
+
+
+# --- windowless page-scope picker (issue #60) ------------------------------------
+
+
+def _windowless_doc_flow(monkeypatch):
+    """Common windowless setup for a dropped-doc picker test."""
+    _no_startup_nudge(monkeypatch)
+    _windowless(monkeypatch, True)
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+    monkeypatch.setattr(cli.config, "get_reporter_name", lambda: "Jana")
+    monkeypatch.setattr(winlaunch, "pause", lambda *a, **k: None)
+    _stub_list_issues(monkeypatch)
+
+
+def test_picker_printed_folio_scopes_bundle(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    # Offset doc: printed "12" lives on PDF index 11.
+    pdf = _doc_with_labelled_notes(tmp_path, {10: "11", 11: "12", 12: "13"})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # Choose [1] printed folio, type "p.12", then the message.
+    res = runner.invoke(cli.app, ["feedback", str(pdf)], input="1\np.12\nthis page is wrong\n")
+    assert res.exit_code == 0, res.output
+    assert seen["page_indices"] == {11}  # resolved to the PDF index, not the literal 12
+    assert seen["message"] == "this page is wrong"
+
+
+def test_picker_document_page_scopes_by_index(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    pdf = _doc_with_labelled_notes(tmp_path, {10: "11", 11: "12"})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # Choose [2] document page, type "12" → 1-based page 12 → 0-based index 11.
+    res = runner.invoke(cli.app, ["feedback", str(pdf)], input="2\n12\nwrong\n")
+    assert res.exit_code == 0, res.output
+    assert seen["page_indices"] == {11}
+
+
+def test_picker_enter_means_whole_document(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    pdf = _doc_with_labelled_notes(tmp_path, {11: "12"})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    res = runner.invoke(cli.app, ["feedback", str(pdf)], input="\nwhole thing\n")
+    assert res.exit_code == 0, res.output
+    assert seen["page_indices"] is None  # unscoped
+
+
+def test_picker_no_match_then_fall_back_to_whole_document(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    pdf = _doc_with_labelled_notes(tmp_path, {11: "12"})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # Printed "999" matches nothing → told clearly, then say yes to whole-doc fallback.
+    res = runner.invoke(cli.app, ["feedback", str(pdf)], input="1\n999\ny\nmsg\n")
+    assert res.exit_code == 0, res.output
+    assert "No page matches p.999" in res.output
+    assert seen["page_indices"] is None  # explicit fall back, never silently widened
+
+
+def test_picker_no_match_then_re_enter_a_valid_folio(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    pdf = _doc_with_labelled_notes(tmp_path, {11: "12"})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # Miss "999", decline the whole-doc fallback (n), back to the menu, pick "12".
+    res = runner.invoke(cli.app, ["feedback", str(pdf)], input="1\n999\nn\n1\n12\nmsg\n")
+    assert res.exit_code == 0, res.output
+    assert "No page matches p.999" in res.output
+    assert seen["page_indices"] == {11}
+
+
+def test_picker_skipped_when_no_doc(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    res = runner.invoke(cli.app, ["feedback"], input="general gripe\n")
+    assert res.exit_code == 0, res.output
+    assert "How do you want to point at the problem?" not in res.output
+    assert seen["page_indices"] is None
+
+
+def test_picker_skipped_when_pages_flag_given(tmp_path, monkeypatch):
+    _windowless_doc_flow(monkeypatch)
+    pdf = _doc_with_labelled_notes(tmp_path, {11: "12"})
+    seen: dict = {}
+    _stub_run_feedback(monkeypatch, seen)
+
+    # An explicit -p scopes directly; the windowless picker is bypassed.
+    res = runner.invoke(cli.app, ["feedback", str(pdf), "-p", "12"], input="msg\n")
+    assert res.exit_code == 0, res.output
+    assert "How do you want to point at the problem?" not in res.output
+    assert seen["pages"] == "12"
+    assert seen["page_indices"] is None
+
+
+def test_windowless_consent_preview_reflects_resolved_pages(tmp_path, monkeypatch):
+    """End-to-end windowless: pick a printed folio, then the REAL run_feedback builds
+    the consent preview from the resolved scope (not a stub) — it names only that page.
+    """
+    _windowless_doc_flow(monkeypatch)
+    monkeypatch.setattr(cli.config, "get_feedback_repo", lambda: "o/r")
+    monkeypatch.setattr(cli.config, "get_feedback_token", lambda: "tok")
+    monkeypatch.setattr(cli.config, "resolve_model", lambda _m: "model")
+    monkeypatch.setattr(cli.config, "get_api_key", lambda: None)  # raw-text, no network
+    pdf = _doc_with_labelled_notes(tmp_path, {10: "11", 11: "12", 12: "13"})
+
+    # Pick [1] p.12 → index 11; at the consent gate, decline (n) so nothing uploads.
+    res = runner.invoke(cli.app, ["feedback", str(pdf)], input="1\np.12\nbad page\nn\n")
+    assert res.exit_code == 0, res.output
+    assert "page-0011.notes.yaml" in res.output  # the resolved page is in the preview
+    assert "page-0010.notes.yaml" not in res.output
+    assert "page-0012.notes.yaml" not in res.output
 
 
 def test_windowless_missing_key_exits_and_pauses(tmp_path, monkeypatch):

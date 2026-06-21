@@ -36,6 +36,26 @@ def _notes_dir(tmp_path: Path, doc: Path, indices: list[int]) -> None:
         )
 
 
+def _labelled_notes_dir(doc: Path, index_to_label: dict[int, object]) -> Path:
+    """Lay down notes files carrying ``source.page_label`` (the printed folio).
+
+    Mirrors a real ``page-NNNN.notes.yaml`` shape closely enough for the locator scan:
+    a top-level ``source`` block with ``page_index`` + (optional) ``page_label``. A
+    label of None writes no ``page_label`` key (the nullable case). Returns the extract
+    dir so a test can point the resolver at it.
+    """
+    extract = workspace.extract_dir(workspace.work_dir(doc))
+    extract.mkdir(parents=True, exist_ok=True)
+    for i, label in index_to_label.items():
+        lines = ["schema_version: 1", "source:", f"  page_index: {i}", "  scope: page"]
+        if label is not None:
+            lines.append(f"  page_label: '{label}'")
+        (extract / f"page-{i:04d}.notes.yaml").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+    return extract
+
+
 class _FakeMessage:
     def __init__(self, text: str):
         self.content = [type("Block", (), {"type": "text", "text": text})()]
@@ -120,6 +140,92 @@ def test_write_bundle_zips_files_flat(tmp_path):
     dest = feedback.write_bundle(files, tmp_path / "bundle.zip")
     with zipfile.ZipFile(dest) as zf:
         assert sorted(zf.namelist()) == ["page-0000.notes.yaml", "page-0001.notes.yaml"]
+
+
+# --- page locators (printed folio ↔ PDF index, ADR-006) ------------------------
+
+
+def test_build_label_index_maps_printed_folio_to_indices(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    # An offset document: index 11 prints "1", index 12 prints "2" (10 front-matter
+    # sheets); index 5 has no detected footer (nullable label).
+    extract = _labelled_notes_dir(doc, {5: None, 11: "1", 12: "2"})
+    index = feedback.build_label_index(extract)
+    assert index == {"1": {11}, "2": {12}}  # the unlabelled page is absent
+
+
+def test_printed_page_matching_one_page_resolves_to_that_index(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    extract = _labelled_notes_dir(doc, {11: "12", 12: "13"})
+    res = feedback.resolve_printed_page(extract, "p.12")
+    assert res.matched is True
+    assert res.indices == {11}
+    assert res.is_whole_document is False
+    assert res.label == "p.12"
+
+
+def test_printed_page_matching_several_pages_resolves_to_all(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    # A roman→arabic restart puts printed "1" on two different sheets.
+    extract = _labelled_notes_dir(doc, {2: "1", 11: "1"})
+    res = feedback.resolve_printed_page(extract, "1")
+    assert res.matched is True
+    assert res.indices == {2, 11}  # both, never silently one
+
+
+def test_printed_page_matching_none_is_a_clear_miss_not_whole_doc(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    extract = _labelled_notes_dir(doc, {11: "12", 12: "13"})
+    res = feedback.resolve_printed_page(extract, "999")
+    assert res.matched is False
+    assert res.indices == set()  # empty, NOT None (which would widen to whole doc)
+    assert res.is_whole_document is False
+
+
+def test_document_page_resolves_by_index(tmp_path):
+    # 1-based page 12 → 0-based index 11; a range too.
+    assert feedback.resolve_document_page("12").indices == {11}
+    assert feedback.resolve_document_page("10-12").indices == {9, 10, 11}
+    miss = feedback.resolve_document_page("")  # empty spec → clear miss, no widen
+    assert miss.matched is False and miss.indices == set()
+
+
+def test_whole_document_resolution_is_unscoped(tmp_path):
+    res = feedback.resolve_whole_document()
+    assert res.is_whole_document is True
+    assert res.indices is None
+    assert res.matched is True
+
+
+def test_collect_bundle_scopes_by_resolved_indices(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    _notes_dir(tmp_path, doc, [0, 1, 2, 3])
+    files = feedback.collect_bundle_files(doc, None, indices={1, 3})
+    assert [f.name for f in files] == ["page-0001.notes.yaml", "page-0003.notes.yaml"]
+
+
+def test_collect_bundle_indices_beats_pages_spec(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    _notes_dir(tmp_path, doc, [0, 1, 2])
+    # Resolved indices win over a pages string when both are supplied.
+    files = feedback.collect_bundle_files(doc, "1", indices={2})
+    assert [f.name for f in files] == ["page-0002.notes.yaml"]
+
+
+def test_build_label_index_skips_unreadable_and_missing_dir(tmp_path):
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    extract = _labelled_notes_dir(doc, {11: "12"})
+    (extract / "page-0099.notes.yaml").write_text(": not valid yaml :", encoding="utf-8")
+    index = feedback.build_label_index(extract)
+    assert index == {"12": {11}}  # the broken file is skipped, the scan still resolves
+    assert feedback.build_label_index(tmp_path / "nope") == {}  # missing dir → empty
 
 
 # --- AI structuring + raw-text fallback ----------------------------------------
@@ -342,6 +448,52 @@ def test_run_happy_path_files_issue_with_mocked_github(tmp_path, monkeypatch):
     assert out.location == "https://github.com/o/r/issues/7"
     # Consent was granted and the bundle was committed (contents POST happened).
     assert any("/contents/" in u for u, _ in gh.posts)
+
+
+def test_run_consent_preview_reflects_resolved_page_indices(tmp_path, monkeypatch):
+    """The file list the user consents to is the resolved scope, not the raw doc.
+
+    Pre-resolved ``page_indices`` (what the windowless picker hands in) must scope the
+    bundle BEFORE the consent preview, so the preview names exactly the pages going up
+    (ADR-003). Here the doc has four pages but only index 2 is scoped.
+    """
+    doc = tmp_path / "Doc.pdf"
+    doc.write_text("x")
+    _notes_dir(tmp_path, doc, [0, 1, 2, 3])
+    seen_preview: dict = {}
+
+    def confirm(preview: str) -> bool:
+        seen_preview["text"] = preview
+        return False  # decline → local fallback (we only care about the preview)
+
+    _run(tmp_path, monkeypatch, doc=doc, page_indices={2}, repo="o/r", token="tok", confirm=confirm)
+    preview = seen_preview["text"]
+    assert "page-0002.notes.yaml" in preview
+    assert "page-0000.notes.yaml" not in preview
+    assert "page-0003.notes.yaml" not in preview
+
+
+def test_feedback_module_does_not_import_the_pipeline():
+    """ADR-003/ADR-006 isolation: feedback reads artifacts, never imports the pipeline.
+
+    The locator resolution must scan ``.tnotes`` with an inline ``yaml.safe_load``, not
+    by calling back into ``compose``/``ingest``/``extract``/``normalize`` — doing so
+    would invert the ``cli → feedback`` dependency arrow.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(feedback))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[-1])
+            for alias in node.names:
+                imported.add(alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add(alias.name.split(".")[-1])
+    assert imported.isdisjoint({"compose", "ingest", "extract", "normalize"})
 
 
 def test_run_consent_preview_lists_bundle_files(tmp_path, monkeypatch):
