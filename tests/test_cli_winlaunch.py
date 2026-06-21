@@ -75,10 +75,37 @@ def test_windowless_pdf_launch_runs_pipeline_and_pauses(tmp_path, monkeypatch):
 
     monkeypatch.setattr("trustworthy_notes.pipeline.run", fake_run)
 
-    res = runner.invoke(cli.app, [str(src)], input="\n")  # \n satisfies the pause
+    # First \n answers the clean-vs-cited prompt (clean); second satisfies the pause.
+    res = runner.invoke(cli.app, [str(src)], input="\n\n")
     assert res.exit_code == 0, res.output
     assert "Done — wrote Foo.tnotes.pdf" in res.output
     assert str(tmp_path) in res.output
+
+
+def test_windowless_pdf_launch_prompts_clean_vs_cited(tmp_path, monkeypatch):
+    _no_startup_nudge(monkeypatch)
+    _windowless(monkeypatch, True)
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+    src = tmp_path / "Foo.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    seen = {}
+
+    def fake_run(pdf, **kw):
+        seen["cite"] = kw["cite"]
+        return pdf.parent / "Foo.tnotes.pdf"
+
+    monkeypatch.setattr("trustworthy_notes.pipeline.run", fake_run)
+
+    # 'c' at the prompt selects the cited copy; trailing \n satisfies the pause.
+    res = runner.invoke(cli.app, [str(src)], input="c\n\n")
+    assert res.exit_code == 0, res.output
+    assert seen["cite"] is True
+
+    # Enter (empty) keeps the clean default.
+    seen.clear()
+    res = runner.invoke(cli.app, [str(src)], input="\n\n")
+    assert res.exit_code == 0, res.output
+    assert seen["cite"] is False
 
 
 def test_windowless_pdf_launch_prompts_for_key_first(tmp_path, monkeypatch):
@@ -98,7 +125,8 @@ def test_windowless_pdf_launch_prompts_for_key_first(tmp_path, monkeypatch):
 
     monkeypatch.setattr("trustworthy_notes.pipeline.run", fake_run)
 
-    res = runner.invoke(cli.app, [str(src)], input="sk-ant-drag\n\n")
+    # key prompt, then the clean-vs-cited prompt, then the pause.
+    res = runner.invoke(cli.app, [str(src)], input="sk-ant-drag\n\n\n")
     assert res.exit_code == 0, res.output
     assert state["key"] == "sk-ant-drag"
     assert "Done — wrote Foo.tnotes.pdf" in res.output
@@ -116,7 +144,8 @@ def test_windowless_pdf_launch_pauses_on_pipeline_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr("trustworthy_notes.pipeline.run", boom)
 
-    res = runner.invoke(cli.app, [str(src)], input="\n")
+    # clean-vs-cited prompt, then the pause after the error.
+    res = runner.invoke(cli.app, [str(src)], input="\n\n")
     assert res.exit_code == 1
     assert "no text pages" in res.output
 
