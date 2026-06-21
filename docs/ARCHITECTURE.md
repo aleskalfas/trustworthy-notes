@@ -114,6 +114,7 @@ module the pipeline never imports — see Invariant 5).
 | `src/trustworthy_notes/updater.py` | `tnotes upgrade` + launch-time update nudge; GitHub+TLS trust root, checksum-as-corruption-guard, verify-launchable-before fail-safe in-place swap | **out-of-pipeline** (self-update trust domain) | built; Windows swap validated on real HW (ADR-001) |
 | `src/trustworthy_notes/feedback.py` | `tnotes feedback`; private-repo upload via out-of-band fine-grained PAT, consent gate, local-file fallback | **out-of-pipeline** (feedback / exfiltration trust domain) | built (ADR-003) |
 | `src/trustworthy_notes/winlaunch.py` | Windowless-launch (double-click / drag) detection, pause-to-read, first-run key onboarding | **out-of-pipeline** (Windows UX) | built; Windows path validated on real HW |
+| `src/trustworthy_notes/maclaunch.py` | `tnotes install-droplet`; compiles a "Send Feedback" AppleScript droplet onto the macOS Desktop via `osacompile`, with the absolute `tnotes` path baked in. **Touches no network** — shells to a local `tnotes` — so it's an OS-integration module, not a network one | **out-of-pipeline** (macOS OS-integration) | built; macOS path validated on real HW (ADR-005) |
 | `src/trustworthy_notes/pricing.py` | Per-model cost **estimate** from provider usage × hardcoded `PRICING_AS_OF` rate table; non-authoritative (leaf, no pipeline imports) | pipeline (leaf, advisory figure) | built (ADR-004) |
 
 ---
@@ -167,7 +168,12 @@ Every methodology section, and where it lives in the implementation.
    0–4 runnable offline with no second-credential surface, and keeps the
    self-update / feedback trust domains out of the extraction trust domain
    (ADR-001 distribution & self-upgrade trust model; ADR-003 feedback
-   data-exfiltration boundary).
+   data-exfiltration boundary). The macOS `maclaunch` module
+   (`cli → maclaunch`, never `pipeline → *`) is the same isolated shape but an
+   **OS-integration, not a network, module**: it touches **no network** — it
+   compiles a desktop droplet that shells to a local `tnotes` (ADR-005) — so it
+   sits beside `winlaunch` outside the pipeline for OS-glue isolation, not for a
+   network surface.
 
 ---
 

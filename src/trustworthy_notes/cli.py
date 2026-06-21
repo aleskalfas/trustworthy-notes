@@ -1832,6 +1832,42 @@ def feedback(
     winlaunch.pause()
 
 
+@app.command(name="install-droplet")
+def install_droplet():
+    """Drop a "Send Feedback" launcher on your macOS Desktop (ADR-005).
+
+    Compiles an AppleScript droplet that opens Terminal running `tnotes feedback`
+    when you drag a PDF onto it (or double-click it for a general report). Run by
+    `scripts/bootstrap.sh` after install; safe to re-run any time (e.g. after moving
+    or reinstalling `tnotes`, which re-bakes the absolute path the droplet targets).
+    macOS only — on any other OS it prints a note and exits cleanly (no error).
+    """
+    from . import maclaunch
+
+    if platform.system() != "Darwin":
+        # Off macOS this is a clean no-op, not a failure: bootstrap calls it
+        # unconditionally on the platforms it supports, and a Linux/Windows run
+        # should say "not for you" and exit 0 rather than look like a broken command.
+        typer.echo("install-droplet is macOS only — there's nothing to install on this OS.")
+        return
+
+    if maclaunch.create_feedback_droplet():
+        droplet = Path.home() / "Desktop" / "Send Feedback.app"
+        typer.echo(f"Created the Send Feedback droplet at {droplet}.")
+        typer.echo("Drag a PDF onto it to report a problem, or double-click it for a general report.")
+        typer.echo(
+            "The first time you use it, macOS will ask you to allow it to control "
+            "Terminal — that's a one-time consent."
+        )
+    else:
+        typer.echo(
+            "Couldn't create the Send Feedback droplet (osacompile failed). "
+            "You can still run `tnotes feedback` directly.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+
 @app.command()
 def upgrade():
     """Update the installed tnotes.exe in place from the latest GitHub Release.
