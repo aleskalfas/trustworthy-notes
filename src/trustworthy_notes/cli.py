@@ -2004,5 +2004,74 @@ def eval_cmd(
         typer.echo(f"\n[wrote {json_out}]", err=True)
 
 
+@app.command(name="eval-add-page", hidden=True)
+def eval_add_page_cmd(
+    doc: Path = typer.Option(
+        ..., "--doc", "-d", exists=True, dir_okay=False,
+        help="The source document whose flagged page to capture (its `.tnotes` notes).",
+    ),
+    pages: str = typer.Option(
+        None, "--pages", "-p",
+        help="1-based page (or range/list, e.g. '14', '14-18', '14,16') to capture. "
+        "Omit to capture every extracted page of the document.",
+    ),
+    corpus: Path = typer.Option(
+        None, "--corpus", "-c", file_okay=False,
+        help="Corpus dir to add the page to. Defaults to your private `eval_corpus_dir`.",
+    ),
+    doc_id: str = typer.Option(
+        None, "--doc-id",
+        help="Corpus doc name (defaults to the source filename, e.g. 'Foo.pdf').",
+    ),
+    notes_dir: Path = typer.Option(
+        None, "--notes-dir", file_okay=False,
+        help="Override where the document's `.tnotes` notes live (default: beside the doc).",
+    ),
+):
+    """Maintainer instrument: turn a flagged page into a floor-score corpus doc (#84).
+
+    When the user flags a page (`tnotes feedback --doc X -p N`), that page's notes are
+    EXACTLY a candidate corpus doc (ADR-007) — her real complaint becomes your
+    regression set. This copies the flagged page's `.tnotes` notes into the corpus
+    layout `tnotes eval` scores, and writes a `source-pages.yaml` SCAFFOLD beside them.
+
+    One manual step remains, by design: paste the page's real source text into the
+    scaffold's `text:` field before scoring. The floor (§7.2) anchors each excerpt
+    against the REAL page stream — which is not stored on disk — so the helper cannot
+    derive it without reading the PDF (forbidden by ADR-007 isolation). See docs/EVAL.md.
+    """
+    from . import eval_capture
+
+    corpus_dir = corpus or config.get_eval_corpus_dir()
+    if not corpus_dir:
+        typer.echo(
+            "no corpus given — pass --corpus or set `eval_corpus_dir` "
+            "(`tnotes config set-eval-corpus-dir <path>`).",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    try:
+        result = eval_capture.capture_flagged_page(
+            doc=doc, pages=pages, corpus_dir=Path(corpus_dir),
+            doc_id=doc_id, notes_dir=notes_dir,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
+
+    indices = ", ".join(str(i) for i in result.pages_captured)
+    typer.echo(
+        f"Captured {len(result.pages_captured)} page(s) [{indices}] into "
+        f"corpus doc: {result.doc_dir}"
+    )
+    if result.needs_source_text:
+        typer.echo(
+            f"NEXT: paste the real page text into `text:` in {result.source_pages_file} "
+            "(the `# excerpt:` comments list what the notes quote). Until then this doc "
+            "will not anchor — the floor needs the real source stream (ADR-007)."
+        )
+
+
 if __name__ == "__main__":
     app()
