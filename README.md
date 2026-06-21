@@ -65,10 +65,15 @@ you can always read the result — or, if something went wrong, the error.
 Feedback"** shortcut during setup, **drag the problem PDF onto it** to report
 against that document, or **double-click it** (no PDF) for a general report.
 Either way a window opens and guides you: it asks for your key the first time,
-then asks you to describe the problem, and — because a report can include
-excerpts of your document — shows you exactly what would be uploaded and waits
-for your **yes** before anything leaves your machine. The window stays open until
-you press a key, so nothing flashes past.
+and — when you dragged a PDF — lets you **point at the page that's wrong**:
+choose **the page number printed in the book** (e.g. `p.12`), **the document's
+page number**, or just press **Enter** to send the whole document. (If a printed
+number matches no page it tells you, and never quietly sends the whole book
+instead.) It then asks you to describe the problem, and — because a report can
+include excerpts of your document — shows you exactly what would be uploaded
+(scoped to the page you chose) and waits for your **yes** before anything leaves
+your machine. The window stays open until you press a key, so nothing flashes
+past.
 
 **For power users — a real terminal.** Everything above is the no-terminal path.
 If you'd rather use the command line (for page ranges, `--cite`, etc.), open a

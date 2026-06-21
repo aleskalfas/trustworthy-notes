@@ -35,6 +35,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+import yaml
+
 from . import build, config, workspace
 
 # GitHub's REST API; the repo path (owner/name) is filled from config, never
@@ -104,16 +106,26 @@ class StructuredReport:
 
 
 def collect_bundle_files(
-    doc: Optional[Path], pages: Optional[str], notes_dir: Optional[Path] = None
+    doc: Optional[Path],
+    pages: Optional[str],
+    notes_dir: Optional[Path] = None,
+    *,
+    indices: Optional[set[int]] = None,
 ) -> list[Path]:
     """The files to bundle for reproduction: the referenced document's ``.tnotes``
-    per-page notes, restricted to ``pages`` when a range is given.
+    per-page notes, restricted to ``pages`` (or pre-resolved ``indices``) when given.
 
     The bundle is the *notes* (verbatim excerpts) + the page range, NOT the source
     PDF (per the design: attach the smallest thing that reproduces). ``doc`` None or
     a missing notes dir yields an empty list — a report with no repro data is still
-    valid (e.g. a general comment). ``pages`` uses the same 1-based spec the rest of
-    the CLI accepts; an unparseable/empty spec means "all notes for the document".
+    valid (e.g. a general comment).
+
+    Two scoping routes, mutually exclusive in practice: ``pages`` is the 1-based spec
+    the ``--pages`` flag accepts (terminal usage), parsed to indices here; ``indices``
+    is an already-resolved index set the windowless picker supplies after running a
+    locator (e.g. a printed-``p.N`` folio, which only the on-disk scan can resolve —
+    ADR-006). When ``indices`` is given it wins; otherwise an unparseable/empty
+    ``pages`` (or neither) means "all notes for the document".
     """
     if doc is None:
         return []
@@ -122,7 +134,12 @@ def collect_bundle_files(
     if not extract.is_dir():
         return []
     all_notes = sorted(extract.glob("page-*.notes.yaml"))
-    wanted = _parse_page_indices(pages) if pages else None
+    if indices is not None:
+        wanted: Optional[set[int]] = indices
+    elif pages:
+        wanted = _parse_page_indices(pages)
+    else:
+        wanted = None
     if wanted is None:
         return all_notes
     return [n for n in all_notes if _page_index_of(n) in wanted]
@@ -158,6 +175,121 @@ def _parse_page_indices(spec: str) -> set[int]:
         except ValueError:
             continue
     return {n - 1 for n in out if n >= 1}
+
+
+# --- Page locators (printed folio ↔ PDF index resolution) ----------------------
+#
+# Per ADR-006 a document has two distinct page identities and we must not conflate
+# them: the **PDF page index** (`page_number - 1`) names the notes files, while the
+# **printed folio** (`source.page_label`) is the `p.N` the reader sees in the book.
+# They diverge on any offset document (roman preliminaries, plates, a restart). A
+# user can only name the printed folio, so the printed-`p.N` locator resolves it to
+# PDF indices by scanning the stored labels — reading produced artifacts, never
+# calling back into the pipeline (`compose`/`ingest`/`extract`/`normalize`), which
+# would invert the `cli → feedback` arrow ADR-003 protects. `page_label` is nullable
+# and not unique, so the printed locator is many-to-one: it resolves to a *set* of
+# indices, degrades clearly when nothing matches, and never widens to the whole doc.
+
+
+@dataclass
+class PageResolution:
+    """The outcome of resolving a user's locator to PDF page indices.
+
+    ``indices`` None means "no scoping" — the whole document (every notes file).
+    A non-None ``indices`` is the resolved set (possibly several pages for a printed
+    folio that repeats across an offset). ``matched`` False with an empty set is the
+    clear miss: the user named a page that exists nowhere in the notes — the caller
+    must surface that and NEVER silently widen to the whole document (ADR-006).
+    ``label`` carries the user-facing identity for the message ("p.12", "page 12").
+    """
+
+    indices: Optional[set[int]]
+    matched: bool
+    label: Optional[str] = None
+
+    @property
+    def is_whole_document(self) -> bool:
+        return self.indices is None
+
+
+def resolve_whole_document() -> PageResolution:
+    """The unscoped locator: bundle every notes file for the document."""
+    return PageResolution(indices=None, matched=True, label=None)
+
+
+def resolve_document_page(spec: str) -> PageResolution:
+    """Resolve a 1-based PDF page spec ('12', '10-14', '10,12') to its indices.
+
+    The total, unique PDF-index path — the unambiguous locator (ADR-006). Reuses the
+    same ``_parse_page_indices`` the ``--pages`` flag and ``collect_bundle_files``
+    already use, so the windowless picker and the terminal flag scope identically. An
+    unparseable/empty spec yields no indices and a clear miss rather than widening.
+    """
+    indices = _parse_page_indices(spec)
+    return PageResolution(
+        indices=indices, matched=bool(indices), label=f"page {spec.strip()}"
+    )
+
+
+def resolve_printed_page(extract_dir: Path, folio: str) -> PageResolution:
+    """Resolve a user-typed printed ``p.N`` to the SET of matching PDF indices.
+
+    Builds the ``page_label → {pdf_index}`` map by scanning the ``.tnotes`` extract
+    dir (see :func:`build_label_index`) and looks up the user's folio. Because the
+    printed folio is nullable and not unique (ADR-006), the result is a set: empty is
+    a clear miss (``matched=False`` — the caller says "no page matches that number"
+    and never widens), one is the common case, several are all bundled.
+    """
+    label = folio.strip().lstrip("pP").lstrip(".").strip()
+    index_by_label = build_label_index(extract_dir)
+    indices = index_by_label.get(label, set())
+    return PageResolution(indices=indices, matched=bool(indices), label=f"p.{label}")
+
+
+def build_label_index(extract_dir: Path) -> dict[str, set[int]]:
+    """Map each stored printed folio to the set of PDF indices carrying it.
+
+    Scans every ``page-NNNN.notes.yaml`` in the ``.tnotes`` extract dir, reading
+    ``source.page_label`` out of each file. The filename supplies the PDF index and
+    the file body supplies the printed folio — the two halves ADR-006 keeps distinct
+    and recovers only from on-disk artifacts. Deliberately inlined ``yaml.safe_load``
+    rather than importing ``compose``/``ingest``/``extract``/``normalize``: pulling in
+    the pipeline to read its own output would invert the ``cli → feedback`` arrow
+    (ADR-003). A file with no label, an unreadable file, or a name we can't index is
+    skipped — a partial scan still resolves the labels it could read.
+    """
+    index_by_label: dict[str, set[int]] = {}
+    if not extract_dir.is_dir():
+        return index_by_label
+    for notes_path in sorted(extract_dir.glob("page-*.notes.yaml")):
+        index = _page_index_of(notes_path)
+        if index is None:
+            continue
+        label = _page_label_of(notes_path)
+        if label is None:
+            continue
+        index_by_label.setdefault(label, set()).add(index)
+    return index_by_label
+
+
+def _page_label_of(notes_path: Path) -> Optional[str]:
+    """The printed folio (``source.page_label``) stored in a notes file, or None.
+
+    Returns None when the file has no label (``page_label`` is nullable — a page with
+    no detected footer), or when the file can't be read/parsed. Stringified so a folio
+    YAML happened to load as an int compares equal to the user's typed digits.
+    """
+    try:
+        data = yaml.safe_load(notes_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    source = data.get("source")
+    if not isinstance(source, dict):
+        return None
+    label = source.get("page_label")
+    return None if label is None else str(label).strip()
 
 
 def write_bundle(files: list[Path], dest: Path) -> Path:
@@ -610,6 +742,7 @@ def run_feedback(
     reporter: str,
     doc: Optional[Path],
     pages: Optional[str],
+    page_indices: Optional[set[int]] = None,
     model: str,
     api_key: Optional[str],
     repo: Optional[str],
@@ -636,9 +769,15 @@ def run_feedback(
     ``confirm`` and ``log`` are injected (the CLI wires them to prompts/echo) so this
     orchestration is fully testable; ``structure_client``/``github_client``/``now``
     are injected in tests to avoid the network and to pin timestamps.
+
+    Scoping: ``pages`` is the terminal ``--pages`` spec (parsed here); ``page_indices``
+    is a pre-resolved index set from the windowless picker's locator (e.g. a printed
+    ``p.N`` only the on-disk scan can resolve — ADR-006). When given, ``page_indices``
+    is resolved *before* the consent preview, so the file list the user consents to is
+    the finally-scoped one (ADR-003), never the raw input.
     """
     diagnostics = capture_diagnostics(message, reporter)
-    bundle_files = collect_bundle_files(doc, pages, notes_dir)
+    bundle_files = collect_bundle_files(doc, pages, notes_dir, indices=page_indices)
     bundle_path: Optional[Path] = None
     if bundle_files:
         bundle_path = write_bundle(bundle_files, fallback_dir / "feedback-bundle.zip")

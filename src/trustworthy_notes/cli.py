@@ -1441,6 +1441,77 @@ def chapters(
     report.emit(workspace.compose_stage_dir(notes_dir, "chapter-map") / "chapters.txt", fp, force, render, label="tnotes chapters")
 
 
+def _pick_page_scope(doc: Path) -> set[int] | None:
+    """The windowless 'how do you want to point at the problem?' picker (issue #60).
+
+    Shown after the dropped doc is confirmed and before the message prompt, only when
+    a document is attached. Returns the resolved PDF page indices to scope the bundle
+    to, or None for "the whole document" (the default). The resolution runs HERE, in
+    the feedback trust domain, so the caller can hand the result to ``run_feedback``
+    and the consent preview reflects the finally-scoped pages, not the raw input
+    (ADR-003). A printed ``p.N`` is resolved against the on-disk notes labels, never
+    by calling the pipeline (ADR-006).
+
+    The menu is data-driven (``_PAGE_SCOPE_OPTIONS``) so issue #61's "paste the
+    passage" option slots in as one more row + resolver, with no change to this loop.
+    """
+    from . import feedback as feedbackmod
+
+    extract = workspace.extract_dir(workspace.work_dir(doc))
+    while True:
+        typer.echo("\nHow do you want to point at the problem?")
+        for key, menu_text, _resolver, _prompt in _PAGE_SCOPE_OPTIONS:
+            typer.echo(f"  [{key}] {menu_text}")
+        typer.echo("  [Enter] The whole document")
+        choice = input("Choose: ").strip()
+        if not choice:
+            return None  # explicit whole-document
+        option = next((o for o in _PAGE_SCOPE_OPTIONS if o[0] == choice), None)
+        if option is None:
+            typer.echo("Please choose one of the listed options.")
+            continue
+        _key, _menu_text, resolver, number_prompt = option
+        number = input(number_prompt).strip()
+        resolution = resolver(feedbackmod, extract, number)
+        if resolution.is_whole_document:
+            return None
+        if resolution.matched:
+            return resolution.indices
+        # Clear miss: never silently widen (ADR-006). Let the user re-enter or fall
+        # back to the whole document by an explicit choice.
+        typer.echo(f"\nNo page matches {resolution.label}.")
+        if typer.confirm("Send the whole document instead?", default=False):
+            return None
+        # else loop back to the menu so they can try another locator/number
+
+
+def _resolve_printed(feedbackmod, extract: Path, number: str):
+    return feedbackmod.resolve_printed_page(extract, number)
+
+
+def _resolve_document_page(feedbackmod, extract: Path, number: str):
+    return feedbackmod.resolve_document_page(number)
+
+
+# The picker rows: (menu key, menu text, resolver, number-prompt). Data-driven so
+# issue #61's "paste the passage" locator is added as one more row + resolver here,
+# without touching the picker loop. Each resolver returns a ``PageResolution``.
+_PAGE_SCOPE_OPTIONS: list[tuple] = [
+    (
+        "1",
+        "By the page number shown in the book (e.g. p.12)",
+        _resolve_printed,
+        "The page number shown in the book (e.g. 12): ",
+    ),
+    (
+        "2",
+        "By the document's page number",
+        _resolve_document_page,
+        "The document's page number (e.g. 12 or 10-14): ",
+    ),
+]
+
+
 @app.command()
 def feedback(
     target: str = typer.Argument(
@@ -1508,6 +1579,10 @@ def feedback(
     # every return so the result/error stays readable. All a no-op in a terminal/
     # pipe/CI run (is_windowless_launch() is False there), so existing usage is
     # untouched.
+    # Pre-resolved page scope from the windowless picker (issue #60). None means "no
+    # picker scoping": the terminal ``--pages`` flag (below) still scopes directly,
+    # and a general/no-doc report stays unscoped.
+    page_indices: set[int] | None = None
     windowless = winlaunch.is_windowless_launch()
     if windowless:
         if not onboarding.ensure_api_key():
@@ -1532,6 +1607,14 @@ def feedback(
                 typer.echo(f"  #{it.number} [{it.state}] {it.title}")
         if doc is not None:
             typer.echo(f"\nReporting a problem with: {doc.name}")
+            # Let the user scope the bundle to a page (issue #60). Resolved HERE, before
+            # the message + consent preview, so the file list they consent to is the
+            # finally-scoped one (ADR-003). No doc → no picker (nothing to scope).
+            if pages is None:
+                try:
+                    page_indices = _pick_page_scope(doc)
+                except (EOFError, KeyboardInterrupt):
+                    page_indices = None
         else:
             typer.echo("\nReporting a general problem (no document attached).")
         try:
@@ -1573,6 +1656,7 @@ def feedback(
         reporter=reporter or "(anonymous)",
         doc=doc,
         pages=pages,
+        page_indices=page_indices,
         model=config.resolve_model(None),
         api_key=config.get_api_key(),
         repo=config.get_feedback_repo(),
