@@ -183,6 +183,64 @@ def test_file_issue_without_bundle_only_posts_issue():
     assert all("/contents/" not in u for u, _ in gh.posts)
 
 
+class _LabelRecordingGitHub(feedback.GitHubClient):
+    """A client whose issue-create returns a number, so the reporter-label path runs.
+
+    ``fail_labels`` makes every ``/labels`` POST raise, to prove a label failure
+    never breaks a filed report.
+    """
+
+    def __init__(self, fail_labels: bool = False):
+        self.posts: list[tuple[str, dict]] = []
+        self._fail_labels = fail_labels
+        super().__init__(token="tok", post=self._post, get=lambda url, tok: [])
+
+    def _post(self, url: str, token: str, payload: dict) -> dict:
+        self.posts.append((url, payload))
+        if "/labels" in url:
+            if self._fail_labels:
+                raise feedback.FeedbackError("label boom")
+            return {}
+        return {"html_url": "https://github.com/o/r/issues/9", "number": 9}
+
+
+def test_file_issue_prefixes_title_with_reporter():
+    report = feedback.StructuredReport(title="export looks blank", body="B", ai_structured=True)
+    gh = _RecordingGitHub()
+    feedback.file_issue(report, "o/r", gh, reporter="Ales Test", now=_NOW)
+    issue_payload = next(p for u, p in gh.posts if u.endswith("/issues"))
+    assert issue_payload["title"] == "[Ales Test] export looks blank"
+
+
+def test_file_issue_without_reporter_keeps_bare_title():
+    report = feedback.StructuredReport(title="T", body="B", ai_structured=True)
+    gh = _RecordingGitHub()
+    feedback.file_issue(report, "o/r", gh, now=_NOW)
+    issue_payload = next(p for u, p in gh.posts if u.endswith("/issues"))
+    assert issue_payload["title"] == "T"
+
+
+def test_file_issue_applies_reporter_label():
+    report = feedback.StructuredReport(title="T", body="B", ai_structured=True)
+    gh = _LabelRecordingGitHub()
+    url = feedback.file_issue(report, "o/r", gh, reporter="Ales Test", now=_NOW)
+    assert url == "https://github.com/o/r/issues/9"
+    # The label is created (slugged) and added to the just-filed issue.
+    assert any(u.endswith("/labels") and p.get("name") == "reporter:ales-test" for u, p in gh.posts)
+    assert any(
+        u.endswith("/issues/9/labels") and p.get("labels") == ["reporter:ales-test"]
+        for u, p in gh.posts
+    )
+
+
+def test_file_issue_label_failure_does_not_break_filing():
+    report = feedback.StructuredReport(title="T", body="B", ai_structured=True)
+    gh = _LabelRecordingGitHub(fail_labels=True)
+    # A label step that blows up must not lose the report — the issue already filed.
+    url = feedback.file_issue(report, "o/r", gh, reporter="Ada", now=_NOW)
+    assert url == "https://github.com/o/r/issues/9"
+
+
 def test_urllib_request_401_raises_feedback_error_with_expired_hint(monkeypatch):
     import urllib.error
     import urllib.request
