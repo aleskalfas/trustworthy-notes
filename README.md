@@ -137,6 +137,7 @@ the notes. A few options change what you get:
 ```
 tnotes ./your.pdf -p 1-30      # only pages 1–30  →  your.p1-30.tnotes.pdf
 tnotes ./your.pdf --cite       # the anchored version: [s-N] markers + a Notes & Sources list
+tnotes ./your.pdf --md         # also keep the Markdown (your.tnotes.md) beside the PDF
 tnotes ./your.pdf --force      # regenerate from scratch (normally finished work is reused)
 ```
 
@@ -252,6 +253,7 @@ book beside the source:
 tnotes INPUT.pdf                 # → INPUT.tnotes.pdf (clean prose reading copy)
 tnotes INPUT.pdf -p 1-30         # just pages 1–30 → INPUT.p1-30.tnotes.pdf
 tnotes INPUT.pdf --cite          # the anchored copy: [s-N] markers + Notes & Sources
+tnotes INPUT.pdf --md            # also keep the Markdown (INPUT.tnotes.md) beside the PDF
 tnotes INPUT.pdf --force         # regenerate every stage (default: skip finished ones)
 ```
 

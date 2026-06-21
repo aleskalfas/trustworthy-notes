@@ -205,13 +205,18 @@ def run(
         help="Produce the anchored version ([s-N] markers + Notes & Sources appendix) "
         "instead of the default clean prose reading copy.",
     ),
+    md: bool = typer.Option(
+        False, "--md",
+        help="Also write the Markdown book (<stem>.tnotes.md) beside the PDF.",
+    ),
 ):
     """One-command book generation: run the whole pipeline on a bare PDF.
 
     Reached as `tnotes <pdf>` (the `run` name is internal). Drives every stage —
     extract → terms → dedup → relations → assemble → export → book — skipping any
-    already finished, and writes the finished book beside the source as
-    <stem>[.pRANGE].tnotes.pdf (clean prose by default; --cite for the anchored copy).
+    already finished, and writes the finished book beside the source as a single
+    <stem>[.pRANGE].tnotes.pdf (clean prose by default; --cite for the anchored copy,
+    --md to also keep the Markdown).
     """
     from . import onboarding, pipeline, winlaunch
 
@@ -239,7 +244,7 @@ def run(
 
     try:
         book_pdf = pipeline.run(
-            pdf, pages=pages, force=force, cite=cite, log=log, parse_pages=_parse_pages
+            pdf, pages=pages, force=force, cite=cite, keep_md=md, log=log, parse_pages=_parse_pages
         )
     except ValueError as exc:
         typer.echo(f"tnotes: {exc}", err=True)

@@ -72,6 +72,7 @@ def run(
     pages: Optional[str] = None,
     force: bool = False,
     cite: bool = False,
+    keep_md: bool = False,
     style: str = "outline",
     model: Optional[str] = None,
     effort: Optional[str] = None,
@@ -98,7 +99,7 @@ def run(
     _build_relations(input_path, work, force, model, effort, api_key, log)
     _assemble(input_path, work, force, log)
     _export(input_path, work, force, style, model, effort, api_key, log)
-    return _book(input_path, work, pages, cite, style, log)
+    return _book(input_path, work, pages, cite, style, log, keep_md=keep_md)
 
 
 def _extract(input_path, work, pages, force, model, effort, api_key, parse_pages, log) -> None:
@@ -252,12 +253,13 @@ def _export(input_path, work, force, style, model, effort, api_key, log) -> None
         log(f"  chapter {num} ({title}): {len(res['cited'])} notes cited")
 
 
-def _book(input_path, work, pages, cite, style, log) -> Path:
+def _book(input_path, work, pages, cite, style, log, keep_md=False) -> Path:
     """Combine the per-chapter exports into the finished book beside the source.
 
     The orchestrator's book includes all sections (the ``--all`` behaviour) and is
     PROSE by default; ``cite`` keeps the [s-N] markers and Notes & Sources
-    appendix. Either way the single output is ``<stem>[.pRANGE].tnotes.pdf``."""
+    appendix. The single output is ``<stem>[.pRANGE].tnotes.pdf``; ``keep_md`` (the
+    ``--md`` flag) also writes the Markdown book beside it for those who want it."""
     exdir = workspace.export_dir(work)
     files = sorted(exdir.glob(f"chapter-*.{style}.md"))
     if not files:
@@ -276,9 +278,13 @@ def _book(input_path, work, pages, cite, style, log) -> Path:
 
     book_md = bookmod.combine(chapters, doc_title=input_path.stem)
     pdf_path = book_path(input_path, pages)
-    md_path = pdf_path.with_suffix(".md")
-    md_path.write_text(book_md, encoding="utf-8")
+    # The PDF renders from the in-memory book text; the Markdown is only persisted
+    # beside the source when explicitly requested (--md), so the default one-command
+    # run leaves a single book file (issue #73).
     pdfmod.markdown_to_pdf(book_md, pdf_path)
+    if keep_md:
+        pdf_path.with_suffix(".md").write_text(book_md, encoding="utf-8")
     kind = "cited" if cite else "prose reading copy"
-    log(f"[7/7] book: {len(chapters)} chapter(s) → {pdf_path.name} ({kind})")
+    extra = " + .md" if keep_md else ""
+    log(f"[7/7] book: {len(chapters)} chapter(s) → {pdf_path.name}{extra} ({kind})")
     return pdf_path

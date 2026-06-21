@@ -41,8 +41,8 @@ def test_bare_pdf_routes_to_orchestrator(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_run(pdf, *, pages, force, cite, log, parse_pages):
-        seen.update(pdf=Path(pdf), pages=pages, force=force, cite=cite)
+    def fake_run(pdf, *, pages, force, cite, keep_md, log, parse_pages):
+        seen.update(pdf=Path(pdf), pages=pages, force=force, cite=cite, keep_md=keep_md)
         return pdf.parent / "Foo.tnotes.pdf"
 
     monkeypatch.setattr("trustworthy_notes.pipeline.run", fake_run)
@@ -51,7 +51,7 @@ def test_bare_pdf_routes_to_orchestrator(tmp_path, monkeypatch):
     res = runner.invoke(cli.app, [str(src)])
     assert res.exit_code == 0, res.stdout
     assert seen["pdf"] == src
-    assert seen == {"pdf": src, "pages": None, "force": False, "cite": False}
+    assert seen == {"pdf": src, "pages": None, "force": False, "cite": False, "keep_md": False}
     assert "Foo.tnotes.pdf" in res.stdout
 
 
@@ -61,16 +61,16 @@ def test_bare_pdf_threads_pages_force_cite(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_run(pdf, *, pages, force, cite, log, parse_pages):
-        seen.update(pages=pages, force=force, cite=cite)
+    def fake_run(pdf, *, pages, force, cite, keep_md, log, parse_pages):
+        seen.update(pages=pages, force=force, cite=cite, keep_md=keep_md)
         return pdf.parent / "out.pdf"
 
     monkeypatch.setattr("trustworthy_notes.pipeline.run", fake_run)
     monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
 
-    res = runner.invoke(cli.app, [str(src), "-p", "1-30", "--force", "--cite"])
+    res = runner.invoke(cli.app, [str(src), "-p", "1-30", "--force", "--cite", "--md"])
     assert res.exit_code == 0, res.stdout
-    assert seen == {"pages": "1-30", "force": True, "cite": True}
+    assert seen == {"pages": "1-30", "force": True, "cite": True, "keep_md": True}
 
 
 def test_bare_pdf_requires_auth(tmp_path, monkeypatch):

@@ -140,6 +140,25 @@ def test_runs_every_stage_in_order_and_writes_book(tmp_path, stub_pipeline):
         "extract:1", "extract:2", "extract:3"}
 
 
+def test_default_run_writes_only_pdf_not_md(tmp_path, stub_pipeline):
+    # #73: the one-command flow leaves a single book file (the PDF) beside the source.
+    src = _src(tmp_path)
+    out = pipeline.run(src, parse_pages=_parse_pages)
+    assert out == tmp_path / "Paper-2506.tnotes.pdf"
+    assert out.is_file()
+    assert not (tmp_path / "Paper-2506.tnotes.md").exists()
+
+
+def test_md_flag_also_writes_markdown(tmp_path, stub_pipeline):
+    # #73: --md (keep_md) additionally writes the Markdown book beside the PDF.
+    src = _src(tmp_path)
+    out = pipeline.run(src, keep_md=True, parse_pages=_parse_pages)
+    assert out.is_file()
+    md = tmp_path / "Paper-2506.tnotes.md"
+    assert md.is_file()
+    assert md.read_text(encoding="utf-8") == stub_pipeline["books"]["md"]
+
+
 def test_page_range_tags_the_output_name(tmp_path, stub_pipeline):
     src = _src(tmp_path)
     out = pipeline.run(src, pages="1-2", parse_pages=_parse_pages)
