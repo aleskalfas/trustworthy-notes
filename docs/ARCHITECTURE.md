@@ -116,6 +116,7 @@ module the pipeline never imports — see Invariant 5).
 | `src/trustworthy_notes/winlaunch.py` | Windowless-launch (double-click / drag) detection, pause-to-read, first-run key onboarding | **out-of-pipeline** (Windows UX) | built; Windows path validated on real HW |
 | `src/trustworthy_notes/maclaunch.py` | `tnotes install-droplet`; compiles a "Send Feedback" AppleScript droplet onto the macOS Desktop via `osacompile`, with the absolute `tnotes` path baked in. **Touches no network** — shells to a local `tnotes` — so it's an OS-integration module, not a network one | **out-of-pipeline** (macOS OS-integration) | built; macOS path validated on real HW (ADR-005) |
 | `src/trustworthy_notes/pricing.py` | Per-model cost **estimate** from provider usage × hardcoded `PRICING_AS_OF` rate table; non-authoritative (leaf, no pipeline imports) | pipeline (leaf, advisory figure) | built (ADR-004) |
+| `src/trustworthy_notes/eval.py` | Maintainer faithfulness yardstick: a deterministic **floor** (verbatim-anchoring §7.2, grounding §7.1, referential integrity §7.4, reusing `validation`/`normalize`) plus a future stochastic **judge**, reported separately next to an instrument fingerprint; **advisory, never a gate** (`cli → eval`, never `pipeline → eval`). Touches the model only for the deferred judge; ships floor-only now | **out-of-pipeline** (maintainer eval) | built (floor); LLM judge **deferred** (ADR-007) |
 
 ---
 
@@ -173,7 +174,13 @@ Every methodology section, and where it lives in the implementation.
    **OS-integration, not a network, module**: it touches **no network** — it
    compiles a desktop droplet that shells to a local `tnotes` (ADR-005) — so it
    sits beside `winlaunch` outside the pipeline for OS-glue isolation, not for a
-   network surface.
+   network surface. The maintainer `eval` module
+   (`cli → eval`, never `pipeline → eval`) is isolated for the same reason: it
+   *reuses* the real floor (`eval → validation`, `eval → normalize` — never
+   re-implementing the checks, COR-007), and the pipeline never imports it, so the
+   faithfulness yardstick can never gate extraction and its future stochastic
+   judge stays out of the extraction trust domain (ADR-007). It ships floor-only
+   today (no network); the deferred judge would touch the model.
 
 ---
 
