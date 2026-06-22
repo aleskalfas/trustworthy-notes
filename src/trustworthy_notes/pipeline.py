@@ -41,7 +41,13 @@ from . import (
     term_store,
     workspace,
 )
-from .extract import run_extract, write_notes
+from .extract import (
+    LANGUAGE_MIXED,
+    LANGUAGE_UNKNOWN,
+    roll_up_detected_language,
+    run_extract,
+    write_notes,
+)
 from .extract_anthropic import AnthropicExtractor
 
 
@@ -66,6 +72,63 @@ def book_path(input_path: Path, pages: Optional[str]) -> Path:
     return input_path.parent / f"{stem}.pdf"
 
 
+def detected_source_language(work: Path) -> str:
+    """The document's source language, rolled up from the per-page extracted notes.
+
+    Reads each ``1-extract/page-*.notes.yaml``'s ``detected_language`` and reduces them
+    (``roll_up_detected_language``): a shared code, else ``"mixed"`` / ``"unknown"``.
+    Reading the on-disk per-page notes keeps detection a Layer-A fact recovered from
+    artifacts — the gate never carries hidden pipeline state (ADR-008)."""
+    page_sets = compose.load_page_sets(work)
+    return roll_up_detected_language(
+        [n.get("detected_language") for n in page_sets.values()]
+    )
+
+
+def resolve_translation(
+    *,
+    detected: str,
+    preferred: str,
+    explicit: bool,
+    confirm: Callable[[str, str], bool],
+    log: Callable[[str], None] = lambda msg: None,
+) -> Optional[str]:
+    """Decide the language export should write in — the semiautomatic translate gate.
+
+    Advisory and never blocking (ADR-008). ``detected`` is the rolled-up source language
+    (or ``"mixed"``/``"unknown"``); ``preferred`` is the resolved preferred language;
+    ``explicit`` is True when the user passed ``--language`` (which is itself the decision
+    to translate). ``confirm(detected, preferred)`` asks the human and returns their
+    answer; it is injected so the CLI owns the prompt and tests can drive it.
+
+    Returns the language to hand ``_export``: a concrete code means "translate to this";
+    ``None`` means "native — no translation, leave the source language as-is".
+
+      * Source already matches the preferred language → native (nothing to translate).
+      * ``--language`` was given → translate without asking (the flag is the decision).
+      * Source unknown/mixed → native (the gate never guesses or prompts on a guess).
+      * Source differs and is known → ``confirm``; Yes → translate, No → native.
+
+    A confirm that does not fire (non-interactive run) declines by returning False, so a
+    redirected/piped/offline run produces native notes exactly as today.
+    """
+    pref = (preferred or "").strip().lower()
+    src = (detected or "").strip().lower()
+
+    if src == pref:
+        return None  # already in the preferred language — nothing to translate
+    if explicit:
+        log(f"translate: writing in {preferred} (explicit --language)")
+        return preferred
+    if src in (LANGUAGE_UNKNOWN, LANGUAGE_MIXED) or not src:
+        # Can't trust a single source language → don't offer; leave it native.
+        return None
+    if confirm(detected, preferred):
+        return preferred
+    log(f"translate: keeping the native ({detected}) text")
+    return None
+
+
 def run(
     input_path: Path,
     *,
@@ -78,6 +141,7 @@ def run(
     effort: Optional[str] = None,
     max_tokens: Optional[int] = None,
     language: Optional[str] = None,
+    confirm_translation: Callable[[str, str], bool] = lambda detected, preferred: False,
     log: Callable[[str], None] = lambda msg: None,
     parse_pages: Callable[[str, int], list[int]],
 ) -> Path:
@@ -89,10 +153,17 @@ def run(
 
     ``language`` is the reader's preferred language, resolved here on the same
     flag > config > built-in chain as ``model``/``effort`` (ADR-008; the OS-locale
-    link is the bootstrap seed only, never read on this hot path). It is carried to
-    the reading/export stage, which is where translation will consume it (#112);
-    until then ``_export`` simply receives and ignores it.
+    link is the bootstrap seed only, never read on this hot path).
+
+    After extraction the per-page notes carry a ``detected_language``; the advisory
+    translate gate (``resolve_translation``) rolls those up to a source language and
+    compares it to the preferred language. When they differ it offers
+    confirm-then-translate via ``confirm_translation(detected, preferred)`` — injected so
+    the CLI owns the prompt and it is TTY-gated. The gate never blocks: a decline (or a
+    non-interactive run, where ``confirm_translation`` returns False) yields native
+    output. The resulting language is what ``_export`` writes in (#112 consumes it).
     """
+    explicit_language = language is not None
     model = config.resolve_model(model)
     effort = config.resolve_effort(effort)
     language = config.resolve_language(language)
@@ -108,7 +179,19 @@ def run(
     _build_dedup(input_path, work, force, model, effort, api_key, log)
     _build_relations(input_path, work, force, model, effort, api_key, log)
     _assemble(input_path, work, force, log)
-    _export(input_path, work, force, style, model, effort, api_key, log, language=language)
+
+    # The advisory translate gate runs after extraction (notes now carry the source
+    # language) and before export (which does the translating). Native output when the
+    # source already matches, when the user declines, or on a non-interactive run.
+    export_language = resolve_translation(
+        detected=detected_source_language(work),
+        preferred=language,
+        explicit=explicit_language,
+        confirm=confirm_translation,
+        log=log,
+    )
+
+    _export(input_path, work, force, style, model, effort, api_key, log, language=export_language)
     return _book(input_path, work, pages, cite, style, log, keep_md=keep_md)
 
 

@@ -70,6 +70,10 @@ THE MODEL
       transliterated source text (e.g. "ḥm.t=f").
 - Relation: a labelled link between two statement keys (or a statement key and a
   term label): defines | supports | contrasts | elaborates | exemplifies | motivates.
+- detected_language: the page's DOMINANT language as a short ISO-ish code
+  ("en", "cs", "de", "fr", "ja", …). Judge it from the BODY prose; ignore stray
+  transliteration glyphs, citations, and footnote markers. This is the SOURCE
+  language only — you never translate anything.
 
 RULES
 - ONE IDEA PER STATEMENT. If you would join two ideas with "and", make two.
@@ -119,6 +123,7 @@ _INTERMEDIATE_SCHEMA = {
     "additionalProperties": False,
     "required": ["statements"],
     "properties": {
+        "detected_language": {"type": "string"},
         "terms": {
             "type": "array",
             "items": {
@@ -269,13 +274,20 @@ def assemble(raw: dict) -> dict:
         if src and dst and r.get("type"):
             relations.append({"from": src, "to": dst, "type": r["type"]})
 
-    return {
+    out = {
         "schema_version": 1,
         "terms": terms,
         "evidence": evidence,
         "statements": statements,
         "relations": relations,
     }
+    # The model reports the page's dominant language ~free as it reads (ADR-008, #115).
+    # Surface it onto the notes-set so `_finalize`/`anchor_gate` carry it through like
+    # `generation`. Blank/absent → omitted, so the field reads as "unknown" downstream.
+    lang = (raw.get("detected_language") or "").strip()
+    if lang:
+        out["detected_language"] = lang
+    return out
 
 
 def _user_message(page: PageText, context: Optional[dict]) -> str:

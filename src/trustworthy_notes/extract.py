@@ -84,7 +84,47 @@ def anchor_gate(notes: dict, page: PageText) -> tuple[dict, list[dict]]:
     # would otherwise be dropped. Omitted when absent, keeping pre-#98 notes unchanged.
     if "generation" in notes:
         cleaned["generation"] = notes["generation"]
+    # Same carry-through for the per-page detected source language (ADR-008, issue #115):
+    # an additive top-level field the rebuild would otherwise drop. Omitted when absent,
+    # so it reads as "unknown" — the field most likely to be silently lost here.
+    if "detected_language" in notes:
+        cleaned["detected_language"] = notes["detected_language"]
     return cleaned, dropped
+
+
+# Sentinels for the document-level detected-language roll-up. A roll-up yields a
+# concrete language code only when every page that recorded one agrees; otherwise it
+# is "unknown" (no page recorded one) or "mixed" (pages disagree) — the same three-way
+# shape `eval`'s generation roll-up uses (ADR-008).
+LANGUAGE_UNKNOWN = "unknown"
+LANGUAGE_MIXED = "mixed"
+
+
+def roll_up_detected_language(languages: list[object]) -> str:
+    """Reduce per-page ``detected_language`` values to one document-level source language.
+
+    Each input is one page's ``detected_language`` (a short code, or None/blank when the
+    page recorded none). Codes are compared case-insensitively. Returns:
+
+      * the shared code when every page that recorded one agrees (pages that recorded
+        none do not veto agreement — an unknown page is silent, not a contradiction);
+      * :data:`LANGUAGE_UNKNOWN` when no page recorded a language;
+      * :data:`LANGUAGE_MIXED` when recorded pages disagree.
+
+    Used by the advisory translate-offer gate to compare the document's source language
+    to the resolved preferred language. ``mixed``/``unknown`` deliberately suppress the
+    offer (the gate never guesses), keeping it advisory and never blocking.
+    """
+    seen = {
+        lang.strip().lower()
+        for lang in languages
+        if isinstance(lang, str) and lang.strip()
+    }
+    if not seen:
+        return LANGUAGE_UNKNOWN
+    if len(seen) > 1:
+        return LANGUAGE_MIXED
+    return next(iter(seen))
 
 
 def _generation_of(extractor: Extractor) -> Optional[dict]:

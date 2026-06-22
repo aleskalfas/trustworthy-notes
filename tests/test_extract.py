@@ -14,7 +14,14 @@ import pytest
 import yaml
 
 from trustworthy_notes import ingest
-from trustworthy_notes.extract import anchor_gate, run_extract, write_notes
+from trustworthy_notes.extract import (
+    LANGUAGE_MIXED,
+    LANGUAGE_UNKNOWN,
+    anchor_gate,
+    roll_up_detected_language,
+    run_extract,
+    write_notes,
+)
 from trustworthy_notes.models import PageText
 from trustworthy_notes.validation import validate_structure
 
@@ -146,6 +153,77 @@ def test_note_without_generation_still_validates():
 
     assert "generation" not in notes
     assert not validate_structure(notes)
+
+
+# ---- detected_language capture + carry-through (issue #115, ADR-008) ----
+
+
+def test_anchor_gate_carries_detected_language_through_rebuild():
+    """The gate rebuilds the notes dict from survivors; an additive top-level
+    `detected_language` must survive that rebuild (the field most likely to be lost)."""
+    page = PageText(page_index=0, page_number=1, text="alpha beta gamma", width=1.0, height=1.0)
+    notes = {
+        "schema_version": 1, "source": {"document": "d", "page_index": 0}, "terms": [],
+        "evidence": [{"id": "e-1", "excerpt": "alpha beta", "source": "body"}],
+        "statements": [{"id": "s-1", "type": "claim", "text": "x", "evidence": ["e-1"]}],
+        "relations": [],
+        "detected_language": "cs",
+    }
+    cleaned, _ = anchor_gate(notes, page)
+    assert cleaned["detected_language"] == "cs"
+
+
+def test_anchor_gate_omits_detected_language_when_absent():
+    """Backward compat: notes with no detected_language stay without one after the gate."""
+    page = PageText(page_index=0, page_number=1, text="alpha beta gamma", width=1.0, height=1.0)
+    notes = {
+        "schema_version": 1, "source": {"document": "d", "page_index": 0}, "terms": [],
+        "evidence": [{"id": "e-1", "excerpt": "alpha beta", "source": "body"}],
+        "statements": [{"id": "s-1", "type": "claim", "text": "x", "evidence": ["e-1"]}],
+        "relations": [],
+    }
+    cleaned, _ = anchor_gate(notes, page)
+    assert "detected_language" not in cleaned
+
+
+def test_run_extract_carries_detected_language_and_stays_valid():
+    """A page whose notes carry detected_language keeps it through extract and validates."""
+    raw = {**_synthetic_notes(), "detected_language": "ja"}
+    notes, _ = run_extract(_synthetic_page(), _StubExtractor(raw), document="d")
+    assert notes["detected_language"] == "ja"
+    assert not validate_structure(notes)
+
+
+def test_note_without_detected_language_still_validates():
+    """Backward compat: a note lacking detected_language (pre-#115) is schema-valid."""
+    notes, _ = run_extract(_synthetic_page(), _StubExtractor(_synthetic_notes()), document="d")
+    assert "detected_language" not in notes
+    assert not validate_structure(notes)
+
+
+# ---- doc-level detected-language roll-up (issue #115) ----
+
+
+def test_roll_up_uniform_language():
+    assert roll_up_detected_language(["cs", "cs", "cs"]) == "cs"
+
+
+def test_roll_up_uniform_language_is_case_insensitive():
+    assert roll_up_detected_language(["CS", "cs", " Cs "]) == "cs"
+
+
+def test_roll_up_uniform_ignores_pages_without_a_language():
+    # An unknown page is silent, not a contradiction: it does not veto agreement.
+    assert roll_up_detected_language(["de", None, "de", ""]) == "de"
+
+
+def test_roll_up_disagreement_is_mixed():
+    assert roll_up_detected_language(["en", "cs"]) == LANGUAGE_MIXED
+
+
+def test_roll_up_no_recorded_language_is_unknown():
+    assert roll_up_detected_language([None, "", None]) == LANGUAGE_UNKNOWN
+    assert roll_up_detected_language([]) == LANGUAGE_UNKNOWN
 
 
 # ---- end to end against the real page (PDF-gated) ----

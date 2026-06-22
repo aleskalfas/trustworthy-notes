@@ -253,9 +253,11 @@ def test_export_forwards_language_to_study_document(tmp_path, stub_pipeline, mon
     assert seen["language"] == "cs"
 
 
-def test_language_absent_resolves_via_config_default(tmp_path, stub_pipeline, monkeypatch):
-    # #114: with no flag, the resolver falls through to the configured value (here
-    # stubbed to "ja"); resolution lives in pipeline.run, not the CLI edge.
+def test_language_absent_with_unknown_source_is_native(tmp_path, stub_pipeline, monkeypatch):
+    # #115: with no flag, the preferred language still resolves via config (here "ja"),
+    # but the advisory gate runs. The stub notes carry no detected_language → the source
+    # rolls up to "unknown", so without an explicit flag the gate declines and export
+    # gets native (None), never a guessed translation.
     monkeypatch.setattr(pipeline.config, "resolve_language", lambda flag: flag or "ja")
     seen = {}
     real_export = pipeline._export
@@ -267,7 +269,159 @@ def test_language_absent_resolves_via_config_default(tmp_path, stub_pipeline, mo
     monkeypatch.setattr(pipeline, "_export", capturing_export)
     src = _src(tmp_path)
     pipeline.run(src, parse_pages=_parse_pages)  # no language flag
-    assert seen["language"] == "ja"  # config/default resolved inside pipeline.run
+    assert seen["language"] is None  # unknown source + no flag → native, no guessing
+
+
+# ---- the advisory translate gate (issue #115, ADR-008) ----
+
+
+def _yes(detected, preferred):
+    return True
+
+
+def _no(detected, preferred):
+    return False
+
+
+def test_gate_match_no_prompt_native():
+    # source already in the preferred language → native, confirm never consulted.
+    calls = []
+    out = pipeline.resolve_translation(
+        detected="cs", preferred="cs", explicit=False,
+        confirm=lambda d, p: calls.append((d, p)) or True,
+    )
+    assert out is None
+    assert calls == []  # no prompt
+
+
+def test_gate_explicit_language_translates_without_prompting():
+    calls = []
+    out = pipeline.resolve_translation(
+        detected="cs", preferred="en", explicit=True,
+        confirm=lambda d, p: calls.append((d, p)) or True,
+    )
+    assert out == "en"  # the flag is the decision
+    assert calls == []  # never asked
+
+
+def test_gate_differ_confirm_yes_translates():
+    out = pipeline.resolve_translation(
+        detected="cs", preferred="en", explicit=False, confirm=_yes,
+    )
+    assert out == "en"
+
+
+def test_gate_differ_confirm_no_is_native():
+    out = pipeline.resolve_translation(
+        detected="cs", preferred="en", explicit=False, confirm=_no,
+    )
+    assert out is None
+
+
+def test_gate_unknown_or_mixed_source_does_not_prompt():
+    calls = []
+    record = lambda d, p: calls.append((d, p)) or True
+    assert pipeline.resolve_translation(
+        detected="unknown", preferred="en", explicit=False, confirm=record) is None
+    assert pipeline.resolve_translation(
+        detected="mixed", preferred="cs", explicit=False, confirm=record) is None
+    assert calls == []  # never offered on a guess
+
+
+def test_gate_unknown_source_with_explicit_flag_still_translates():
+    # An explicit --language is the decision even when the source language is unclear.
+    out = pipeline.resolve_translation(
+        detected="unknown", preferred="cs", explicit=True, confirm=_no,
+    )
+    assert out == "cs"
+
+
+def _stub_detected(monkeypatch, language):
+    """Make the per-page extraction stamp `language` on every page's notes, so the
+    gate's roll-up sees it through the real load_page_sets path."""
+    def fake_run_extract(target, extractor, *, document, context):
+        notes = {"statements": [{"id": "s-1"}], "evidence": [], "terms": [], "relations": []}
+        if language is not None:
+            notes["detected_language"] = language
+        return notes, []
+    monkeypatch.setattr(pipeline, "run_extract", fake_run_extract)
+
+
+def test_gate_through_pipeline_confirm_yes_passes_language_to_export(
+    tmp_path, stub_pipeline, monkeypatch
+):
+    # detected (cs) ≠ preferred (en): confirm fires, Yes → "en" reaches _export.
+    monkeypatch.setattr(pipeline.config, "resolve_language", lambda flag: flag or "en")
+    _stub_detected(monkeypatch, "cs")
+    seen = {}
+    real_export = pipeline._export
+    monkeypatch.setattr(pipeline, "_export",
+                        lambda *a, language=None, **k: seen.update(language=language)
+                        or real_export(*a, language=language, **k))
+    asked = []
+    pipeline.run(_src(tmp_path), parse_pages=_parse_pages,
+                 confirm_translation=lambda d, p: asked.append((d, p)) or True)
+    assert asked == [("cs", "en")]      # the gate offered cs→en
+    assert seen["language"] == "en"     # Yes → translation language to export
+
+
+def test_gate_through_pipeline_confirm_no_is_native(tmp_path, stub_pipeline, monkeypatch):
+    monkeypatch.setattr(pipeline.config, "resolve_language", lambda flag: flag or "en")
+    _stub_detected(monkeypatch, "cs")
+    seen = {}
+    real_export = pipeline._export
+    monkeypatch.setattr(pipeline, "_export",
+                        lambda *a, language=None, **k: seen.update(language=language)
+                        or real_export(*a, language=language, **k))
+    pipeline.run(_src(tmp_path), parse_pages=_parse_pages,
+                 confirm_translation=lambda d, p: False)
+    assert seen["language"] is None     # decline → native
+
+
+def test_gate_through_pipeline_match_does_not_prompt(tmp_path, stub_pipeline, monkeypatch):
+    monkeypatch.setattr(pipeline.config, "resolve_language", lambda flag: flag or "cs")
+    _stub_detected(monkeypatch, "cs")  # source == preferred
+    asked = []
+    seen = {}
+    real_export = pipeline._export
+    monkeypatch.setattr(pipeline, "_export",
+                        lambda *a, language=None, **k: seen.update(language=language)
+                        or real_export(*a, language=language, **k))
+    pipeline.run(_src(tmp_path), parse_pages=_parse_pages,
+                 confirm_translation=lambda d, p: asked.append((d, p)) or True)
+    assert asked == []                  # match → no prompt
+    assert seen["language"] is None     # no translation
+
+
+def test_gate_through_pipeline_explicit_flag_translates_without_prompt(
+    tmp_path, stub_pipeline, monkeypatch
+):
+    monkeypatch.setattr(pipeline.config, "resolve_language", lambda flag: flag or "en")
+    _stub_detected(monkeypatch, "cs")
+    asked = []
+    seen = {}
+    real_export = pipeline._export
+    monkeypatch.setattr(pipeline, "_export",
+                        lambda *a, language=None, **k: seen.update(language=language)
+                        or real_export(*a, language=language, **k))
+    pipeline.run(_src(tmp_path), language="de", parse_pages=_parse_pages,
+                 confirm_translation=lambda d, p: asked.append((d, p)) or True)
+    assert asked == []                  # explicit flag → never asked
+    assert seen["language"] == "de"     # translate to the requested language
+
+
+def test_gate_default_non_interactive_confirm_declines(tmp_path, stub_pipeline, monkeypatch):
+    # The default confirm_translation (no callable injected) declines, so a
+    # non-interactive run produces native output even when languages differ.
+    monkeypatch.setattr(pipeline.config, "resolve_language", lambda flag: flag or "en")
+    _stub_detected(monkeypatch, "cs")
+    seen = {}
+    real_export = pipeline._export
+    monkeypatch.setattr(pipeline, "_export",
+                        lambda *a, language=None, **k: seen.update(language=language)
+                        or real_export(*a, language=language, **k))
+    pipeline.run(_src(tmp_path), parse_pages=_parse_pages)  # no confirm injected
+    assert seen["language"] is None
 
 
 def test_single_section_document_still_yields_a_book(tmp_path, stub_pipeline):
