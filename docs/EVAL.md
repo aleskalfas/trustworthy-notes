@@ -19,8 +19,14 @@ first. The binding rules it sets, applied here:
   **not built** (building the naive form is the failure mode the ADR forbids).
 - **A reading is only comparable next to its fingerprint.** Every score carries an
   instrument fingerprint: corpus id, a hash of the doc list, the timestamp, the
-  tool/build version, and the floor counts. Change the instrument (the corpus, the
-  build) and you cannot compare across runs.
+  tool/build version, and the floor counts (including the **completeness** counts).
+  Change the instrument (the corpus, the build) and you cannot compare across runs.
+- **The floor is completeness-aware.** Anchoring/grounding are computed only over the
+  notes that *exist* — so a run that silently lost pages (extraction failed mid-sweep,
+  stale notes left behind) could read a *higher, perfect* number for *less* of the
+  document. The floor closes that trap: a corpus doc records which pages are
+  **expected** to have notes, and `eval` reports expected against present. A doc
+  missing any expected page is **incomplete** and can never read as a clean 100%.
 
 ## Run it
 
@@ -28,7 +34,22 @@ Point it at a corpus directory:
 
 `uv run tnotes eval --corpus tests/fixtures/eval-smoke`
 
-It prints a per-doc + aggregate floor-score report. To save a comparable artifact:
+It prints a per-doc + aggregate floor-score report. Each doc row ends with a
+**completeness** column — `notes <present>/<expected>` — and any doc that lost
+expected pages shows them inline:
+
+```
+ anchored   grounded  excerpts   stmts  ref  schema      notes  doc
+     100%       100%      18/18      24    0       0      7/15   some-document  MISSING [2, 3, 4, 11, 12, 17, 20, 21]
+```
+
+`MISSING` lists the page indices that were **expected to have notes but don't** —
+failed or un-extracted pages (exactly what a tuning sweep with token-exhausted pages
+produces). A corpus with any incomplete doc prints an `INCOMPLETE` banner and does
+**not** read as a clean 100%, even when every note that *does* exist anchors verbatim.
+That is the point: a stale or partial run cannot launder itself into a perfect score.
+
+To save a comparable artifact:
 
 `uv run tnotes eval --corpus tests/fixtures/eval-smoke --json /tmp/score.json`
 
@@ -78,7 +99,7 @@ generated per-page notes plus the source page streams §7.2 anchors against:
 ```
 corpus/
   some-document/
-    source-pages.yaml         # the source page streams: page_index / text / footnotes
+    source-pages.yaml         # source streams + expected-notes markers (see below)
     1-extract/
       page-0000.notes.yaml    # the generated notes (workspace layout)
       page-0001.notes.yaml
@@ -86,10 +107,45 @@ corpus/
     ...
 ```
 
-`source-pages.yaml` is a list of `{ page_index, text, footnotes }` — the only three
-fields the §7.2 traceability check reads. Keeping the streams beside the notes makes
-the corpus self-contained: `eval` needs no PDF and never calls back into the
-pipeline (the isolation ADR-007 requires).
+`source-pages.yaml` is a list of `{ page_index, text, footnotes, expected_notes }`:
+
+- `text` / `footnotes` are the source streams the §7.2 traceability check anchors
+  excerpts against. Keeping them beside the notes makes the corpus self-contained:
+  `eval` needs no PDF and never calls back into the pipeline (the isolation ADR-007
+  requires).
+- `expected_notes: true/false` is the **completeness** marker — whether the page is
+  expected to have notes (a *text* page; the pipeline extracts exactly those). `eval`
+  compares the expected pages against the pages that actually have a notes file and
+  flags any gap as MISSING.
+
+**Backward compatibility.** `expected_notes` is optional. A `source-pages.yaml` with
+**no** markers on any page (the older shape, e.g. the public smoke corpus) falls back
+to "expected = the pages that have notes" — completeness is then trivially satisfied
+and no false MISSING is fabricated. Only corpora captured by `tnotes eval add-doc`
+(which writes the markers) get a real completeness check.
+
+### Build a corpus doc — `tnotes eval add-doc`
+
+The real corpus-build path. After running a document through the pipeline, capture the
+whole generated doc into your corpus in one command:
+
+`tnotes eval add-doc --doc data/Foo.pdf --corpus /path/to/your/eval-corpus`
+
+(Omit `--corpus` to use your configured `eval_corpus_dir`.) It:
+
+1. copies the doc's per-page notes into `<corpus>/Foo.pdf/1-extract/`, and
+2. reads the source pages (via `ingest`, **cli-side**) and writes
+   `<corpus>/Foo.pdf/source-pages.yaml` with the real `text`/`footnotes` *and* the
+   `expected_notes` marker per page — so §7.2 anchoring is honest and the completeness
+   check has its expected-page denominator.
+
+Reading the source streams cli-side at capture time keeps `eval` itself
+import-isolated from the pipeline (it scores the manifest the capture *wrote*; it never
+re-reads a PDF — ADR-007). This supersedes the throwaway corpus-builder script.
+
+If the document has expected pages with no notes (a failed/partial extraction),
+`add-doc` says so immediately (`INCOMPLETE … MISSING [...]`) — re-extract those pages
+before relying on the doc, or it will score as incomplete.
 
 ### The private real corpus
 
@@ -167,6 +223,12 @@ catches this; the spot-check does. (If a page also had a key claim with no state
 that page would additionally be marked **dropped-important**.)
 
 ## Turn a flagged feedback page into a regression-corpus doc
+
+`eval add-doc` (above) is the path for a *whole* document you still have the PDF for —
+it reads the real source streams for you. `eval-add-page` is the narrower,
+**single-page feedback-capture** path: when the user flags one page and you want just
+that page in your regression set. It leaves `text:` empty for you to paste, because the
+flagged-page flow does not assume the PDF is on hand.
 
 When the user flags a page (`tnotes feedback --doc X -p N`), that page's notes are
 **exactly** a candidate corpus doc (ADR-007) — her real complaint is the best possible

@@ -27,7 +27,8 @@ entailment judge ADR-007 defers is not built; this is the floor only.
 Corpus layout. A corpus dir holds one subdirectory per document. Each doc dir
 carries the generated per-page notes under ``1-extract/page-*.notes.yaml`` (the
 workspace convention) plus a ``source-pages.yaml`` listing the source page
-streams (``page_index`` / ``text`` / ``footnotes``) §7.2 anchors against::
+streams (``page_index`` / ``text`` / ``footnotes``) §7.2 anchors against, each
+optionally marked ``expected_notes: true/false`` for the completeness check::
 
     corpus/
       doc-a/
@@ -75,6 +76,14 @@ class FloorCounts:
     Identical notes in → identical counts out. ``*_problems`` count the problem
     strings the real checks emit; the rate properties derive the simple
     anchored/grounded fractions a regression moves.
+
+    ``pages_expected``/``pages_present`` are the **completeness** axis (ADR-007's
+    completeness-aware floor): a count of how many of the source pages a corpus doc
+    declared as *expected to have notes* actually do. A run that lost half a document
+    (extraction failed mid-sweep, stale notes left behind) shows ``pages_present <
+    pages_expected`` here — so a partial or stale-contaminated corpus can never read
+    as a clean 100%. This is part of the fingerprint, so coverage is one of the things
+    that makes two runs comparable.
     """
 
     statements_total: int = 0
@@ -83,6 +92,8 @@ class FloorCounts:
     excerpts_anchored: int = 0
     referential_problems: int = 0
     schema_problems: int = 0
+    pages_expected: int = 0
+    pages_present: int = 0
 
     def __add__(self, other: "FloorCounts") -> "FloorCounts":
         """Aggregate two docs' counts (so the corpus total is the sum of its docs)."""
@@ -93,6 +104,8 @@ class FloorCounts:
             excerpts_anchored=self.excerpts_anchored + other.excerpts_anchored,
             referential_problems=self.referential_problems + other.referential_problems,
             schema_problems=self.schema_problems + other.schema_problems,
+            pages_expected=self.pages_expected + other.pages_expected,
+            pages_present=self.pages_present + other.pages_present,
         )
 
     @property
@@ -104,6 +117,15 @@ class FloorCounts:
     def grounded_rate(self) -> float:
         """§7.1: fraction of statements that cite at least one evidence record."""
         return _rate(self.statements_grounded, self.statements_total)
+
+    @property
+    def complete_rate(self) -> float:
+        """Completeness: fraction of expected note-pages that are present. 1.0 when none.
+
+        Below 1.0 means a doc lost expected pages — the exact signal a failed/stale
+        sweep produces (ADR-007). The empty denominator (a doc with no expected-page
+        info) reads as vacuously complete, never a fabricated gap."""
+        return _rate(self.pages_present, self.pages_expected)
 
 
 def _rate(numerator: int, denominator: int) -> float:
@@ -122,11 +144,25 @@ class DocFloorScore:
     ``doc_id`` is the corpus subdir name (stable across runs). ``problems`` carries
     the human-readable strings the real checks emitted, so a regression report can
     show *what* failed, not just that a rate dropped.
+
+    The completeness fields (ADR-007) are page-index sets: ``expected_pages`` are the
+    source pages the corpus declared *should* have notes, ``present_pages`` are those
+    that actually have a notes file, and ``missing_pages`` is the gap. A non-empty
+    ``missing_pages`` means the doc is **incomplete** — a failed/stale-contaminated run
+    that must not read as a clean 100%.
     """
 
     doc_id: str
     counts: FloorCounts
     problems: list[str] = field(default_factory=list)
+    expected_pages: list[int] = field(default_factory=list)
+    present_pages: list[int] = field(default_factory=list)
+    missing_pages: list[int] = field(default_factory=list)
+
+    @property
+    def is_complete(self) -> bool:
+        """True when every expected note-page is present — no missing/failed pages."""
+        return not self.missing_pages
 
 
 @dataclass(frozen=True)
@@ -167,7 +203,9 @@ class FloorScore:
 # --- Scoring -------------------------------------------------------------------
 
 
-def score_doc(doc_id: str, notes_files: list[Path], pages: list[PageText]) -> DocFloorScore:
+def score_doc(
+    doc_id: str, notes_files: list[Path], source: "SourcePages"
+) -> DocFloorScore:
     """Run the real §7 floor checks over one doc's per-page notes and tally counts.
 
     Calls ``validation.validate_structure`` (§7.1/§7.4/§7.5 via the schema +
@@ -176,17 +214,30 @@ def score_doc(doc_id: str, notes_files: list[Path], pages: list[PageText]) -> Do
     derived per page and summed: a statement is grounded (§7.1) when it cites at
     least one evidence record; a text excerpt is anchored (§7.2) when it is NOT named
     in a traceability problem for its evidence id.
+
+    Completeness (ADR-007). ``source`` carries the source page streams *and* the set
+    of pages the corpus declared as **expected** to have notes. The expected set is
+    compared against the page indices that actually have a notes file: any expected
+    page with no notes is a **missing** page, and a doc with any missing page is
+    flagged incomplete (it cannot read as a clean 100%). When the corpus declared no
+    expected set (a pre-completeness corpus like the public smoke fixture), expected
+    falls back to the pages that *have* notes — completeness is then trivially
+    satisfied, never a fabricated gap (the backward-compat contract).
     """
-    by_index = {p.page_index: p for p in pages}
+    by_index = {p.page_index: p for p in source.pages}
     counts = FloorCounts()
     problems: list[str] = []
+    present: set[int] = set()
 
     for notes_path in sorted(notes_files):
+        index = _page_index_of(notes_path)
         data = _load_notes(notes_path)
         if data is None:
             problems.append(f"schema [{notes_path.name}]: not valid YAML or not a mapping")
             counts = counts + FloorCounts(schema_problems=1)
             continue
+        if index is not None:
+            present.add(index)
 
         structure_problems = validation.validate_structure(data)
         # The source streams for this notes-set's page; default index from `source`.
@@ -198,7 +249,28 @@ def score_doc(doc_id: str, notes_files: list[Path], pages: list[PageText]) -> Do
         counts = counts + page_counts
         problems.extend(f"{notes_path.name}: {p}" for p in structure_problems + traceability_problems)
 
-    return DocFloorScore(doc_id=doc_id, counts=counts, problems=problems)
+    # Expected = what the corpus declared, or (backward-compat) the pages that have
+    # notes when no expectation was recorded — so a pre-completeness corpus never
+    # invents a gap. Missing = expected pages with no notes file: the failed/stale
+    # pages ADR-007's completeness check exists to surface.
+    expected = source.expected_pages if source.expected_pages is not None else set(present)
+    missing = expected - present
+    completeness = FloorCounts(pages_expected=len(expected), pages_present=len(expected & present))
+
+    if missing:
+        problems.append(
+            f"completeness: {len(missing)} expected page(s) have no notes "
+            f"(missing/failed: {sorted(missing)})"
+        )
+
+    return DocFloorScore(
+        doc_id=doc_id,
+        counts=counts + completeness,
+        problems=problems,
+        expected_pages=sorted(expected),
+        present_pages=sorted(present),
+        missing_pages=sorted(missing),
+    )
 
 
 def _count_floor(
@@ -253,8 +325,8 @@ def score_corpus(corpus_dir: str | Path, *, now: Optional[datetime] = None) -> F
     aggregate = FloorCounts()
     for doc_dir in doc_dirs:
         notes_files = sorted(workspace.extract_dir(doc_dir).glob("page-*.notes.yaml"))
-        pages = _load_source_pages(doc_dir / SOURCE_PAGES_FILE)
-        doc_score = score_doc(doc_dir.name, notes_files, pages)
+        source = _load_source_pages(doc_dir / SOURCE_PAGES_FILE)
+        doc_score = score_doc(doc_dir.name, notes_files, source)
         docs.append(doc_score)
         aggregate = aggregate + doc_score.counts
 
@@ -293,40 +365,82 @@ def _load_notes(notes_path: Path) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _load_source_pages(path: Path) -> list[PageText]:
-    """Load a doc's ``source-pages.yaml`` into the PageText list §7.2 anchors against.
+@dataclass(frozen=True)
+class SourcePages:
+    """A corpus doc's source streams plus its declared expected note-page set.
+
+    ``pages`` are the PageText streams §7.2 anchors excerpts against. ``expected_pages``
+    is the set of page indices the corpus declared as *expected to have notes* (ADR-007's
+    completeness denominator), or ``None`` when the corpus declared no expectation — the
+    pre-completeness/backward-compat case the scorer reads as "expected = whatever has
+    notes", so no gap is fabricated.
+    """
+
+    pages: list[PageText]
+    expected_pages: Optional[set[int]]
+
+
+def _load_source_pages(path: Path) -> SourcePages:
+    """Load a doc's ``source-pages.yaml`` into the streams §7.2 anchors against, plus
+    the completeness expected-page set.
 
     Each entry needs ``page_index``, ``text``, ``footnotes``; the remaining PageText
     fields are §7.2-irrelevant (check_traceability reads only those three) so they
-    take harmless placeholder values. A missing/unreadable file yields an empty list —
-    then every text excerpt fails to anchor (its page is "not among extracted pages"),
-    which the floor correctly surfaces rather than silently passing.
+    take harmless placeholder values. A missing/unreadable file yields empty streams
+    and no expectation — then every text excerpt fails to anchor (its page is "not
+    among extracted pages"), which the floor correctly surfaces rather than silently
+    passing.
+
+    Completeness markers (ADR-007). A page entry may carry ``expected_notes: true/false``
+    declaring whether the page is *expected* to have notes (the ``add-doc`` capture
+    writes this from ``page_type == "text"``). If **any** entry carries the marker, the
+    expected-page set is the indices marked ``true``; if **no** entry carries it (the
+    pre-completeness smoke corpus), ``expected_pages`` is ``None`` — the backward-compat
+    signal the scorer reads as "expect exactly what has notes", so no false MISSING.
     """
     if not path.is_file():
-        return []
+        return SourcePages(pages=[], expected_pages=None)
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
-        return []
+        return SourcePages(pages=[], expected_pages=None)
     entries = raw.get("pages") if isinstance(raw, dict) else raw
     if not isinstance(entries, list):
-        return []
+        return SourcePages(pages=[], expected_pages=None)
     pages: list[PageText] = []
+    expected: set[int] = set()
+    saw_marker = False
     for entry in entries:
         if not isinstance(entry, dict) or "page_index" not in entry:
             continue
-        index = entry["page_index"]
+        index = int(entry["page_index"])
         pages.append(
             PageText(
-                page_index=int(index),
-                page_number=int(index) + 1,
+                page_index=index,
+                page_number=index + 1,
                 text=str(entry.get("text", "")),
                 width=0.0,
                 height=0.0,
                 footnotes=str(entry.get("footnotes", "")),
             )
         )
-    return pages
+        if "expected_notes" in entry:
+            saw_marker = True
+            if entry["expected_notes"]:
+                expected.add(index)
+    return SourcePages(pages=pages, expected_pages=expected if saw_marker else None)
+
+
+def _page_index_of(notes_path: Path) -> Optional[int]:
+    """The 0-based page index encoded in a ``page-NNNN.notes.yaml`` filename, or None.
+
+    Mirrors ``feedback._page_index_of`` but kept local so ``eval`` imports no pipeline
+    module (ADR-007 isolation); the filename convention is the workspace's, stable."""
+    stem = notes_path.name.split(".")[0]  # "page-0013"
+    try:
+        return int(stem.split("-")[1])
+    except (IndexError, ValueError):
+        return None
 
 
 def _pages_for(
@@ -371,6 +485,10 @@ def to_dict(score: FloorScore) -> dict:
                 "doc_id": d.doc_id,
                 "counts": _counts_with_rates(d.counts),
                 "problems": d.problems,
+                "complete": d.is_complete,
+                "expected_pages": d.expected_pages,
+                "present_pages": d.present_pages,
+                "missing_pages": d.missing_pages,
             }
             for d in score.docs
         ],
@@ -382,6 +500,7 @@ def _counts_with_rates(counts: FloorCounts) -> dict:
     out = asdict(counts)
     out["anchored_rate"] = counts.anchored_rate
     out["grounded_rate"] = counts.grounded_rate
+    out["complete_rate"] = counts.complete_rate
     return out
 
 
