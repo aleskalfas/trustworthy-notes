@@ -255,6 +255,7 @@ tnotes INPUT.pdf -p 1-30         # just pages 1–30 → INPUT.p1-30.tnotes.pdf
 tnotes INPUT.pdf --cite          # the anchored copy: [s-N] markers + Notes & Sources
 tnotes INPUT.pdf --md            # also keep the Markdown (INPUT.tnotes.md) beside the PDF
 tnotes INPUT.pdf --force         # regenerate every stage (default: skip finished ones)
+tnotes INPUT.pdf --model M --effort high   # override extraction settings (tuning; see docs/EVAL.md)
 ```
 
 Already-finished stages are skipped, so a re-run resumes where it left off (use
