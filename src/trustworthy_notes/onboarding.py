@@ -3,8 +3,8 @@
 A non-technical Windows user double-clicks the exe with no PDF. This module is the
 *flow* that greets them: it shows what tnotes is, makes sure a Claude key is set,
 optionally captures the feedback credentials so ``tnotes feedback`` works with no
-terminal, and optionally drops a "Send Feedback" shortcut on the desktop. It then
-hands back to the caller, which pauses so the window stays readable.
+terminal, and optionally drops "Make Notes" and "Send Feedback" shortcuts on the
+desktop. It then hands back to the caller, which pauses so the window stays readable.
 
 This is deliberately split from :mod:`winlaunch`, which now holds only the
 Windows-only launch *mechanics* (console-ownership detection, the pause, and the
@@ -186,34 +186,40 @@ def _verify_feedback_connection(repo: str, token: str) -> tuple[str, str, bool]:
     return repo, token, False
 
 
-def offer_feedback_shortcut() -> None:
-    """Offer, behind a one-tap confirm, to drop a "Send Feedback" desktop shortcut.
+def offer_desktop_shortcuts() -> None:
+    """Offer, behind one combined confirm, to drop both desktop shortcuts.
 
-    Per ADR-005: never silent — the shortcut is created only when the user agrees.
-    Defaults to yes (Enter accepts) so the easy path is one keypress, but any answer
-    other than yes declines cleanly. The actual ``.lnk`` creation is delegated to
-    :func:`winlaunch.create_feedback_shortcut`, which is a no-op off Windows; this
-    flow only handles the consent and the user-facing reporting.
+    Creates a "Make Notes" and a "Send Feedback" shortcut — the Windows parity of the
+    macOS two droplets (issue #105). A single one-tap confirm keeps the easy path one
+    keypress: per ADR-005 it is never silent (both are created only when the user
+    agrees), defaults to yes (Enter accepts), and any answer other than yes declines
+    cleanly. Each ``.lnk`` is created independently via its :mod:`winlaunch` primitive
+    (no-ops off Windows) and reported on its own, so one failing never hides the other;
+    this flow only handles the consent and the user-facing reporting.
     """
     try:
         answer = input(
-            "\nAdd a Send Feedback shortcut to your Desktop? [Y/n] "
+            "\nAdd Make Notes and Send Feedback shortcuts to your Desktop? [Y/n] "
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
     if answer not in ("", "y", "yes"):
         return
+    if winlaunch.create_make_notes_shortcut():
+        print("Added a Make Notes shortcut to your Desktop.")
+    else:
+        print("Couldn't create the Make Notes shortcut — you can still drag a PDF onto tnotes.")
     if winlaunch.create_feedback_shortcut():
         print("Added a Send Feedback shortcut to your Desktop.")
     else:
-        print("Couldn't create the shortcut — you can still run feedback any time.")
+        print("Couldn't create the Send Feedback shortcut — you can still run feedback any time.")
 
 
 def onboard() -> None:
     """The friendly first-screen for a bare double-click (no PDF given).
 
     Shows what tnotes is, makes sure a key is set (prompting on first run), offers
-    the optional feedback setup and its desktop shortcut, then tells the user the
+    the optional feedback setup and the desktop shortcuts, then tells the user the
     one thing they need to do next — drag a PDF onto the icon. Always ends paused
     (via the caller) so the window stays readable.
 
@@ -229,7 +235,7 @@ def onboard() -> None:
     if not ensure_api_key():
         return
     if setup_feedback():
-        offer_feedback_shortcut()
+        offer_desktop_shortcuts()
     print(
         "\nSetup complete. Drag a PDF file onto this tnotes icon to make notes.\n"
         "The finished book is written right next to your PDF as <name>.tnotes.pdf."

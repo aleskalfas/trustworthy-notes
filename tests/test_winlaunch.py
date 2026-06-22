@@ -5,8 +5,11 @@ console, and a real `.lnk` write — cannot be exercised on macOS/Linux/CI, so t
 tests stub the platform check, `ctypes`, `input`, and `subprocess` to drive every
 branch. The detector's own fail-safe contract is asserted directly (non-Windows →
 False; a raising ctypes call → False; an ambiguous count → False), and the
-shortcut primitive's PowerShell command + off-Windows no-op are asserted with
-`subprocess` mocked. First real validation of the live launch is a Windows run.
+shortcut primitives' PowerShell command + off-Windows no-op are asserted with
+`subprocess` mocked. Both shortcuts (Make Notes, Send Feedback) run through one
+shared builder (`_create_shortcut`); these assert each one's baked `.lnk` name and
+`Arguments`, plus the gate and fail-safe. First real validation of the live launch
+is a Windows run.
 
 The onboarding *flow* (key prompt, feedback setup) moved to `onboarding.py`; its
 tests live in `test_onboarding.py`.
@@ -108,10 +111,10 @@ def test_pause_swallows_eof(monkeypatch):
     winlaunch.pause()  # must not propagate
 
 
-# --- create_feedback_shortcut: PowerShell command + off-Windows no-op -------------
+# --- shortcuts: PowerShell command + off-Windows no-op (shared builder) ------------
 
 
-def test_shortcut_is_a_noop_off_windows(monkeypatch):
+def test_feedback_shortcut_is_a_noop_off_windows(monkeypatch):
     monkeypatch.setattr(winlaunch.platform, "system", lambda: "Darwin")
 
     def must_not_shell_out(*_a, **_k):
@@ -121,16 +124,32 @@ def test_shortcut_is_a_noop_off_windows(monkeypatch):
     assert winlaunch.create_feedback_shortcut() is False
 
 
-def test_shortcut_builds_powershell_command_targeting_exe_feedback(monkeypatch):
+def test_make_notes_shortcut_is_a_noop_off_windows(monkeypatch):
+    monkeypatch.setattr(winlaunch.platform, "system", lambda: "Darwin")
+
+    def must_not_shell_out(*_a, **_k):
+        raise AssertionError("must not shell out off Windows")
+
+    monkeypatch.setattr(winlaunch.subprocess, "run", must_not_shell_out)
+    assert winlaunch.create_make_notes_shortcut() is False
+
+
+def _capture_run(monkeypatch, returncode=0):
+    """Mock subprocess.run on a Windows-stubbed platform; capture the argv."""
     monkeypatch.setattr(winlaunch.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(winlaunch.sys, "executable", r"C:\Users\me\tnotes\tnotes.exe")
     captured = {}
 
     def fake_run(argv, **_k):
         captured["argv"] = argv
-        return subprocess.CompletedProcess(argv, 0, b"", b"")
+        return subprocess.CompletedProcess(argv, returncode, b"", b"")
 
     monkeypatch.setattr(winlaunch.subprocess, "run", fake_run)
+    return captured
+
+
+def test_feedback_shortcut_builds_powershell_command_targeting_exe_feedback(monkeypatch):
+    monkeypatch.setattr(winlaunch.sys, "executable", r"C:\Users\me\tnotes\tnotes.exe")
+    captured = _capture_run(monkeypatch)
 
     assert winlaunch.create_feedback_shortcut() is True
     argv = captured["argv"]
@@ -141,22 +160,44 @@ def test_shortcut_builds_powershell_command_targeting_exe_feedback(monkeypatch):
     # it goes onto the Desktop — never a versioned/temp path (ADR-001 survivability).
     assert "WScript.Shell" in script and "CreateShortcut" in script
     assert r"C:\Users\me\tnotes\tnotes.exe" in script
+    # Regression guard: the feedback shortcut still bakes the `feedback` argument,
+    # now emitted through the shared builder's quoting (identical result).
     assert "$s.Arguments = 'feedback'" in script
     assert "Send Feedback.lnk" in script
     assert "Desktop" in script
 
 
-def test_shortcut_returns_false_when_powershell_fails(monkeypatch):
-    monkeypatch.setattr(winlaunch.platform, "system", lambda: "Windows")
+def test_make_notes_shortcut_builds_powershell_command_targeting_bare_exe(monkeypatch):
+    monkeypatch.setattr(winlaunch.sys, "executable", r"C:\Users\me\tnotes\tnotes.exe")
+    captured = _capture_run(monkeypatch)
 
-    def fake_run(argv, **_k):
-        return subprocess.CompletedProcess(argv, 1, b"", b"boom")
+    assert winlaunch.create_make_notes_shortcut() is True
+    argv = captured["argv"]
+    assert argv[0] == "powershell"
+    assert "-Command" in argv
+    script = argv[-1]
+    # The target is the stable exe, with NO `feedback` argument — dropping a PDF on the
+    # shortcut launches the bare exe with the file (→ run/orchestrator), and it lands on
+    # the Desktop under the "Make Notes" name.
+    assert "WScript.Shell" in script and "CreateShortcut" in script
+    assert r"C:\Users\me\tnotes\tnotes.exe" in script
+    assert "feedback" not in script
+    assert "$s.Arguments = ''" in script
+    assert "Make Notes.lnk" in script
+    assert "Desktop" in script
 
-    monkeypatch.setattr(winlaunch.subprocess, "run", fake_run)
+
+def test_feedback_shortcut_returns_false_when_powershell_fails(monkeypatch):
+    _capture_run(monkeypatch, returncode=1)
     assert winlaunch.create_feedback_shortcut() is False
 
 
-def test_shortcut_returns_false_when_powershell_missing(monkeypatch):
+def test_make_notes_shortcut_returns_false_when_powershell_fails(monkeypatch):
+    _capture_run(monkeypatch, returncode=1)
+    assert winlaunch.create_make_notes_shortcut() is False
+
+
+def test_feedback_shortcut_returns_false_when_powershell_missing(monkeypatch):
     monkeypatch.setattr(winlaunch.platform, "system", lambda: "Windows")
 
     def fake_run(*_a, **_k):
@@ -164,3 +205,13 @@ def test_shortcut_returns_false_when_powershell_missing(monkeypatch):
 
     monkeypatch.setattr(winlaunch.subprocess, "run", fake_run)
     assert winlaunch.create_feedback_shortcut() is False
+
+
+def test_make_notes_shortcut_returns_false_when_powershell_missing(monkeypatch):
+    monkeypatch.setattr(winlaunch.platform, "system", lambda: "Windows")
+
+    def fake_run(*_a, **_k):
+        raise OSError("powershell not found")
+
+    monkeypatch.setattr(winlaunch.subprocess, "run", fake_run)
+    assert winlaunch.create_make_notes_shortcut() is False

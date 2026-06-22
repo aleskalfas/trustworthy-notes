@@ -40,9 +40,10 @@ you've pasted the token, tnotes **checks the connection** and tells you whether 
 worked (`Connected — feedback is ready.`); if it can't reach the repo it shows why
 and lets you re-enter the token (or point at a different repo), save anyway (handy
 if you're just offline), or skip — so you never end up with broken details saved as
-"ready". If the setup succeeds, tnotes offers to add a **"Send Feedback"
-shortcut to your Desktop**; answer **Y** and a shortcut appears that files a report
-in one double-click (it keeps working across upgrades). Everything you paste is
+"ready". If the setup succeeds, tnotes offers to add a **"Make Notes"** and a
+**"Send Feedback"** shortcut to your Desktop; answer **Y** and both appear — drag a
+PDF onto **Make Notes** to turn it into a book, or onto **Send Feedback** to file a
+report in one drop (both keep working across upgrades). Everything you paste is
 saved privately in your home folder, never in the repo or the exe.
 
 It then says *"Setup complete. Drag a PDF file onto this tnotes icon to make
