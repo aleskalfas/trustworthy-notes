@@ -21,6 +21,7 @@ scoped key with a spend cap and rotate it if it's ever exposed.
 
 from __future__ import annotations
 
+import locale
 import os
 import re
 from pathlib import Path
@@ -67,6 +68,11 @@ def normalise_feedback_repo(raw: str) -> str:
 # running long on this bounded task.
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_EFFORT = "low"
+
+# Fallback preferred language for the translate-offer gate when neither a flag,
+# the user config, nor (at bootstrap) the OS locale supplies one. English is the
+# tool's working default and the last link in the resolution chain (ADR-008).
+DEFAULT_LANGUAGE = "en"
 
 # Built-in default feedback repo (#52). The repo name is NOT a secret — only the
 # token is (ADR-003's bright line), and the token is never defaulted or baked in.
@@ -167,6 +173,82 @@ def resolve_effort(flag: Optional[str]) -> str:
         return flag
     cfg_effort = get_effort()
     return cfg_effort if cfg_effort is not None else DEFAULT_EFFORT
+
+
+def get_language() -> Optional[str]:
+    """The user-configured preferred language as a short code, or None if unset."""
+    return load().get("language") or None
+
+
+def set_language(language: str) -> None:
+    cfg = load()
+    cfg["language"] = language
+    save(cfg)
+
+
+def resolve_language(flag: Optional[str]) -> str:
+    """Resolve the preferred language: an explicit flag wins, then user config,
+    then the built-in default. The single source of preferred-language resolution
+    for every command (ADR-008).
+
+    The hot resolve path is deliberately free of platform I/O: the OS locale is
+    *not* read here. :func:`detect_os_language` seeds the config default once at
+    bootstrap; from then on resolution is the same cheap flag/config/default chain
+    as :func:`resolve_model`.
+    """
+    return flag or get_language() or DEFAULT_LANGUAGE
+
+
+def detect_os_language() -> Optional[str]:
+    """The OS's preferred language as a short code (e.g. ``"en"``, ``"cs"``,
+    ``"ja"``), or None if it can't be determined.
+
+    A bootstrap-only helper for *seeding* the config default — never called from
+    :func:`resolve_language`, which keeps platform I/O off the hot resolve path
+    (ADR-008). Fully fail-safe: any error, or an undeterminable locale, yields None
+    so a caller can fall back to :data:`DEFAULT_LANGUAGE`.
+
+    Reads :func:`locale.getlocale` first (the locale the process is running in),
+    falling back to the ``LC_ALL`` / ``LC_MESSAGES`` / ``LANG`` environment locale
+    that ``getdefaultlocale`` historically consulted — done by hand because that
+    function is deprecated from Python 3.11. The result is normalised to the bare
+    language subtag (``"cs_CZ.UTF-8"`` and ``"cs-CZ"`` both → ``"cs"``).
+    """
+    try:
+        raw = locale.getlocale()[0] or _os_locale_from_env()
+    except Exception:
+        return None
+    return _normalise_language(raw)
+
+
+def _os_locale_from_env() -> Optional[str]:
+    """The locale name from the standard locale env vars, or None.
+
+    Replicates the precedence ``locale.getdefaultlocale`` used (``LC_ALL`` >
+    ``LC_MESSAGES`` > ``LANG``) without the deprecated call. ``"C"`` / ``"POSIX"``
+    are the unset sentinels and read as None.
+    """
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var)
+        if value and value not in ("C", "POSIX"):
+            return value
+    return None
+
+
+def _normalise_language(raw: Optional[str]) -> Optional[str]:
+    """Reduce a locale string to its bare lowercase language subtag, or None.
+
+    Strips any territory and encoding suffix, accepting both the POSIX ``_`` and
+    the BCP-47 ``-`` separators: ``"cs_CZ.UTF-8"`` → ``"cs"``, ``"en-US"`` →
+    ``"en"``. A value that holds no language part (empty, or ``"C"`` / ``"POSIX"``)
+    reads as None.
+    """
+    if not raw:
+        return None
+    language = raw.split(".", 1)[0].replace("-", "_").split("_", 1)[0].strip().lower()
+    if not language or language in ("c", "posix"):
+        return None
+    return language
 
 
 def get_feedback_repo() -> str:
