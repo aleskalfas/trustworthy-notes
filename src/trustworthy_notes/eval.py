@@ -507,3 +507,206 @@ def _counts_with_rates(counts: FloorCounts) -> dict:
 def to_json(score: FloorScore) -> str:
     """Serialise a floor score to stable, sorted JSON (comparable across runs)."""
     return json.dumps(to_dict(score), indent=2, sort_keys=True, ensure_ascii=False)
+
+
+# --- Comparison across runs (#97) ----------------------------------------------
+#
+# Read 2+ already-serialised floor-score JSONs (the shape `to_dict` emits) and build
+# a labelled delta table, so a low-vs-high tuning sweep is a glance, not a manual diff.
+# This stays on the *serialised* shape (a dict, not a FloorScore) on purpose: a compare
+# reads stored readings, and reading dicts keeps it import-clean — no pipeline, no PDF,
+# nothing the isolation arrow (ADR-007) forbids. The comparability guard and the
+# completeness surfacing are the two ADR-007 disciplines a sweep must not lose: a score
+# is only comparable next to a matching fingerprint, and a page-losing run must never
+# look "better" for having fewer-but-cleaner notes.
+
+
+class NotAFloorScore(ValueError):
+    """A loaded JSON is not a floor-score artifact (wrong/absent ``kind``/``schema_version``).
+
+    Raised so the cli can turn it into a clean one-line error rather than a traceback.
+    """
+
+
+def parse_score_dict(data: object) -> dict:
+    """Validate that ``data`` is a floor-score artifact (the shape :func:`to_dict` emits).
+
+    Checks the two identity fields the artifact carries for exactly this purpose:
+    ``kind == "floor-only"`` and a ``schema_version`` this harness understands. Raises
+    :class:`NotAFloorScore` otherwise — a foreign or malformed JSON is a user error to
+    report, not a shape to limp along with. Returns the dict unchanged on success.
+    """
+    if not isinstance(data, dict):
+        raise NotAFloorScore("not a JSON object")
+    if data.get("kind") != "floor-only":
+        raise NotAFloorScore(f"kind is {data.get('kind')!r}, expected 'floor-only'")
+    version = data.get("schema_version")
+    if version != SCORE_SCHEMA_VERSION:
+        raise NotAFloorScore(
+            f"schema_version {version!r}, this tool understands {SCORE_SCHEMA_VERSION}"
+        )
+    return data
+
+
+# The metrics a comparison shows, in display order. Each row is (label, kind, getter):
+# `kind` is "rate" (a 0..1 fraction shown as a percent, with a percentage-point delta)
+# or "ratio" (a present/total pair shown as "n/m", with the delta on the numerator).
+# The getter pulls from a score dict's `aggregate` block (the shape `_counts_with_rates`
+# emits). Kept as data, not branchy code, so adding a metric is a one-line edit.
+_COMPARE_METRICS: list[tuple[str, str, str, str]] = [
+    # (display label, kind, numerator key, denominator key — denominator unused for rates)
+    ("anchored rate", "rate", "anchored_rate", ""),
+    ("grounded rate", "rate", "grounded_rate", ""),
+    ("complete rate", "rate", "complete_rate", ""),
+    ("excerpts", "ratio", "excerpts_anchored", "excerpts_total"),
+    ("statements", "ratio", "statements_grounded", "statements_total"),
+    ("pages", "ratio", "pages_present", "pages_expected"),
+]
+
+
+@dataclass(frozen=True)
+class CompareCell:
+    """One metric's value for one run: either a rate or a present/total ratio."""
+
+    kind: str  # "rate" | "ratio"
+    rate: Optional[float] = None  # set when kind == "rate"
+    numerator: Optional[int] = None  # set when kind == "ratio"
+    denominator: Optional[int] = None  # set when kind == "ratio"
+
+
+@dataclass(frozen=True)
+class CompareRow:
+    """One metric across every run, plus the first→last delta."""
+
+    label: str
+    kind: str  # "rate" | "ratio"
+    cells: list[CompareCell]
+    # First→last delta. For a rate, the percentage-point change (last - first). For a
+    # ratio, the numerator change (e.g. statements 163 → 248 is delta_numerator +85).
+    delta_rate: Optional[float] = None
+    delta_numerator: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    """Per-run header data a comparison surfaces: label, corpus, and completeness."""
+
+    label: str
+    corpus_id: str
+    corpus_hash: str
+    tool_version: str
+    complete: bool
+    # The doc_ids that lost expected pages in this run — the page-losing signal a sweep
+    # must see (ADR-007), so a partial run can't masquerade as a cleaner one.
+    incomplete_docs: list[str]
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """A structured low-vs-high comparison: per-run summaries, metric rows, and a guard.
+
+    ``comparable`` is the ADR-007 fingerprint guard: True only when every run shares one
+    ``corpus_hash``. When False the runs scored *different documents*, so the table is
+    informational, not a real low-vs-high delta — the cli flags this loudly.
+    """
+
+    runs: list[RunSummary]
+    rows: list[CompareRow]
+    comparable: bool
+    corpus_hashes: list[str]
+
+    @property
+    def any_incomplete(self) -> bool:
+        """True when any run lost expected pages — a page-losing run is in the set."""
+        return any(not r.complete for r in self.runs)
+
+
+def compare_scores(labelled: list[tuple[str, dict]]) -> Comparison:
+    """Build a structured comparison from 2+ labelled floor-score dicts.
+
+    ``labelled`` is ``(label, score_dict)`` pairs in display order; each ``score_dict``
+    is the shape :func:`to_dict` emits (validate with :func:`parse_score_dict` first).
+    Returns a :class:`Comparison`: one :class:`CompareRow` per metric (columns = runs),
+    each carrying the first→last delta, plus per-run summaries and the corpus-hash
+    comparability guard (ADR-007). Rates delta as percentage points; count metrics delta
+    on the numerator (e.g. statements 163 → 248 reads +85).
+
+    Pure and reading-only: it touches no filesystem and imports nothing the pipeline
+    isolation forbids — it reads stored readings, the whole point of the fingerprint.
+    """
+    if len(labelled) < 2:
+        raise ValueError("need at least two scores to compare")
+
+    runs = [_summarise_run(label, data) for label, data in labelled]
+    aggregates = [data.get("aggregate") or {} for _, data in labelled]
+
+    rows: list[CompareRow] = []
+    for label, kind, num_key, den_key in _COMPARE_METRICS:
+        cells = [_cell(agg, kind, num_key, den_key) for agg in aggregates]
+        rows.append(_row_with_delta(label, kind, cells))
+
+    hashes = [r.corpus_hash for r in runs]
+    comparable = len(set(hashes)) == 1
+    return Comparison(runs=runs, rows=rows, comparable=comparable, corpus_hashes=hashes)
+
+
+def _summarise_run(label: str, data: dict) -> RunSummary:
+    """Pull a run's header fields and its page-losing docs from a score dict."""
+    fp = data.get("fingerprint") or {}
+    docs = data.get("docs") or []
+    # A doc is incomplete when the scorer flagged `complete: False` or recorded any
+    # missing page — either way it lost expected pages (ADR-007).
+    incomplete = [
+        str(d.get("doc_id"))
+        for d in docs
+        if isinstance(d, dict) and (d.get("complete") is False or d.get("missing_pages"))
+    ]
+    return RunSummary(
+        label=label,
+        corpus_id=str(fp.get("corpus_id", "?")),
+        corpus_hash=str(fp.get("corpus_hash", "?")),
+        tool_version=str(fp.get("tool_version", "?")),
+        complete=not incomplete,
+        incomplete_docs=incomplete,
+    )
+
+
+def _cell(aggregate: dict, kind: str, num_key: str, den_key: str) -> CompareCell:
+    """One metric's value for one run, read from its ``aggregate`` block."""
+    if kind == "rate":
+        return CompareCell(kind="rate", rate=_as_float(aggregate.get(num_key)))
+    return CompareCell(
+        kind="ratio",
+        numerator=_as_int(aggregate.get(num_key)),
+        denominator=_as_int(aggregate.get(den_key)),
+    )
+
+
+def _row_with_delta(label: str, kind: str, cells: list[CompareCell]) -> CompareRow:
+    """A metric row with its first→last delta (percentage points / numerator change)."""
+    first, last = cells[0], cells[-1]
+    if kind == "rate":
+        delta = None
+        if first.rate is not None and last.rate is not None:
+            delta = last.rate - first.rate
+        return CompareRow(label=label, kind=kind, cells=cells, delta_rate=delta)
+    delta_n = None
+    if first.numerator is not None and last.numerator is not None:
+        delta_n = last.numerator - first.numerator
+    return CompareRow(label=label, kind=kind, cells=cells, delta_numerator=delta_n)
+
+
+def _as_float(value: object) -> Optional[float]:
+    """A float, or None when the field was absent/unparseable (a tolerant read)."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value: object) -> Optional[int]:
+    """An int, or None when the field was absent/unparseable (a tolerant read)."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None

@@ -56,7 +56,8 @@ To save a comparable artifact:
 The JSON is a small, stable, sorted shape carrying the fingerprint, so two runs
 diff cleanly. To compare two runs, **check the fingerprints match first** (corpus
 hash + tool version) — a number that improved under a *different* instrument is not
-a real improvement.
+a real improvement. `tnotes eval-compare A.json B.json [...]` does this check for
+you and prints a labelled delta table (see the sweep section below).
 
 ## Tuning the extraction defaults (the sweep)
 
@@ -90,7 +91,20 @@ The procedure:
    `tnotes eval --corpus <dir> --json score-<setting>.json`.
 3. Compare the **floor-scores** across settings — a worse setting often shows up
    mechanically (lower anchoring/grounding rates: the model invented or mangled
-   quotes).
+   quotes). Instead of diffing the JSONs by hand, run `eval-compare` to print a
+   labelled delta table:
+
+   `tnotes eval-compare score-low.json score-high.json --label low --label high`
+
+   It lines the runs up as columns and shows the first→last Δ on each metric
+   (rates as percentage points; counts on the numerator — e.g. statements 163 → 248
+   reads `+85`). `--label` is optional; omitted, columns are labelled by filename
+   stem. The table **leads with a comparability line**: `✓ same corpus` when every
+   run shares one `corpus_hash`, or a loud `⚠ NOT COMPARABLE — different corpus`
+   when they don't (a fingerprint mismatch means you compared *different documents*,
+   not different settings — ADR-007). It also flags any **incomplete** run
+   (`⚠ INCOMPLETE`), so a page-losing run can't look "better" for having
+   fewer-but-cleaner notes.
 4. The floor can't see *mischaracterization* (a real quote, wrongly described), so
    also apply the **spot-check rubric** below on a few pages per setting.
 5. If a setting clearly wins on both, change the default (`DEFAULT_EFFORT` /
