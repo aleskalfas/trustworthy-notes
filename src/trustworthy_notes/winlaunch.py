@@ -12,8 +12,14 @@ APIs and nothing the pipeline needs:
 * :func:`is_windowless_launch` — detect "we own our own console" (double-click /
   drag), fail-safe to ``False`` everywhere else (Windows-only ``ctypes``);
 * :func:`pause` — hold the window open until a keypress, but only when windowless;
+* :func:`create_make_notes_shortcut` — drop a "Make Notes" ``.lnk`` on the desktop
+  running the bare exe on a dropped PDF (issue #105), a no-op off Windows;
 * :func:`create_feedback_shortcut` — drop a "Send Feedback" ``.lnk`` on the
   desktop via a PowerShell shell-out (ADR-005), a no-op off Windows.
+
+Both shortcuts share a single private builder (:func:`_create_shortcut`); each only
+chooses the ``.lnk`` name and the ``Arguments`` baked into it — mirroring how
+:mod:`maclaunch` factors its droplets through ``_create_droplet``.
 
 The first-run *flow* that calls these — the welcome screen, the key prompt, the
 optional feedback setup — lives in :mod:`onboarding`, deliberately kept separate
@@ -105,30 +111,39 @@ def pause(prompt: str = "\nPress Enter to close this window…") -> None:
         pass
 
 
-def create_feedback_shortcut() -> bool:
-    """Create a "Send Feedback" ``.lnk`` on the user's desktop — Windows only (ADR-005).
+def _create_shortcut(name: str, arguments: str) -> bool:
+    """Create a Desktop ``.lnk`` targeting the stable exe — Windows only (ADR-005).
+
+    The shared mechanism behind :func:`create_make_notes_shortcut` and
+    :func:`create_feedback_shortcut`; they differ only in the ``.lnk`` basename and
+    the baked ``Arguments``, so the platform gate, fail-safe, ``sys.executable``
+    target, WorkingDirectory, quoting, and the ``powershell -Command`` invocation
+    live here once. ``name`` is the Desktop ``.lnk`` basename without extension (e.g.
+    ``"Make Notes"``); ``arguments`` is the fixed argument string to bake in (``""``
+    for the bare exe → run/orchestrator flow, ``"feedback"`` for feedback) — both
+    authored literals, never user input.
 
     Returns ``True`` when a shortcut was created, ``False`` on any other outcome:
     off Windows it is a **no-op** that returns ``False`` (mirroring how
     :func:`is_windowless_launch` gates its ctypes call behind a platform check), and
     a failed shell-out is swallowed and returns ``False`` so onboarding never
     crashes over a cosmetic extra. The *consent* gate lives in
-    :func:`onboarding.offer_feedback_shortcut`; this is just the platform glue.
+    :func:`onboarding.offer_desktop_shortcuts`; this is just the platform glue.
 
     Mechanism (ADR-005, exactly): a ``powershell -Command`` shell-out invoking
     ``WScript.Shell.CreateShortcut`` — **no** ``win32com``/``pywin32`` dependency,
     since PowerShell ships on every Windows 10/11. The shortcut targets the *stable*
-    running exe name (``sys.executable`` when frozen) with the ``feedback``
-    argument, so it survives ADR-001's upgrade rename (which moves the new build
-    into the freed stable name); we deliberately do not encode a versioned path.
+    running exe name (``sys.executable`` when frozen), so it survives ADR-001's
+    upgrade rename (which moves the new build into the freed stable name); we
+    deliberately do not encode a versioned path.
     """
     if platform.system() != "Windows":
         return False
     target = sys.executable
     desktop = Path.home() / "Desktop"
-    lnk = desktop / "Send Feedback.lnk"
+    lnk = desktop / f"{name}.lnk"
     # WScript.Shell builds the .lnk; TargetPath is the stable exe, Arguments is the
-    # feedback subcommand, WorkingDirectory the exe's folder. Quoting: PowerShell
+    # baked argument string, WorkingDirectory the exe's folder. Quoting: PowerShell
     # single-quotes take any path verbatim, and we escape an embedded single quote
     # the PowerShell way (doubling it) so a username with a quote can't break out.
     def ps_quote(value: str) -> str:
@@ -138,7 +153,7 @@ def create_feedback_shortcut() -> bool:
         "$w = New-Object -ComObject WScript.Shell; "
         f"$s = $w.CreateShortcut({ps_quote(str(lnk))}); "
         f"$s.TargetPath = {ps_quote(target)}; "
-        "$s.Arguments = 'feedback'; "
+        f"$s.Arguments = {ps_quote(arguments)}; "
         f"$s.WorkingDirectory = {ps_quote(str(Path(target).parent))}; "
         "$s.Save()"
     )
@@ -152,3 +167,28 @@ def create_feedback_shortcut() -> bool:
         # PowerShell missing or unlaunchable — the safe direction is "no shortcut".
         return False
     return result.returncode == 0
+
+
+def create_make_notes_shortcut() -> bool:
+    """Create a "Make Notes" ``.lnk`` on the user's desktop — Windows only (ADR-005, #105).
+
+    The book-flow analogue of :func:`create_feedback_shortcut` and the Windows twin of
+    :func:`maclaunch.create_make_notes_droplet`: dropping a PDF onto it launches the bare
+    exe with the file (``Arguments`` empty), so Windows hands the dropped path to the
+    run/orchestrator flow. See :func:`_create_shortcut` for the shared platform gate,
+    fail-safe, stable-exe target, and PowerShell mechanism; this only names the ``.lnk``
+    and bakes no argument.
+    """
+    return _create_shortcut("Make Notes", "")
+
+
+def create_feedback_shortcut() -> bool:
+    """Create a "Send Feedback" ``.lnk`` on the user's desktop — Windows only (ADR-005).
+
+    Dropping a PDF onto it (or double-clicking it) launches ``tnotes.exe feedback``. See
+    :func:`_create_shortcut` for the shared platform gate, fail-safe, stable-exe target,
+    and PowerShell mechanism; this only names the ``.lnk`` and bakes the ``feedback``
+    argument. The shortcut targets the *stable* exe so it survives ADR-001's upgrade
+    rename; we deliberately do not encode a versioned path.
+    """
+    return _create_shortcut("Send Feedback", "feedback")

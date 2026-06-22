@@ -280,40 +280,65 @@ def test_normalise_feedback_repo(raw, expected):
     assert onboarding.normalise_feedback_repo(raw) == expected
 
 
-# --- offer_feedback_shortcut: one-tap confirm gates the (mocked) primitive ----------
+# --- offer_desktop_shortcuts: one combined confirm gates both (mocked) primitives ---
 
 
-def test_shortcut_offer_creates_on_yes(monkeypatch):
+def _count_both(monkeypatch, *, make_notes=True, feedback_ok=True):
+    """Stub both shortcut primitives, counting calls; return the counter dict."""
+    calls = {"make_notes": 0, "feedback": 0}
+
+    def fake_make():
+        calls["make_notes"] += 1
+        return make_notes
+
+    def fake_feedback():
+        calls["feedback"] += 1
+        return feedback_ok
+
+    monkeypatch.setattr(winlaunch, "create_make_notes_shortcut", fake_make)
+    monkeypatch.setattr(winlaunch, "create_feedback_shortcut", fake_feedback)
+    return calls
+
+
+def test_shortcut_offer_creates_both_on_yes(monkeypatch, capsys):
     monkeypatch.setattr(builtins, "input", lambda _p="": "y")
-    calls = {"n": 0}
-
-    def fake_create():
-        calls["n"] += 1
-        return True
-
-    monkeypatch.setattr(winlaunch, "create_feedback_shortcut", fake_create)
-    onboarding.offer_feedback_shortcut()
-    assert calls["n"] == 1
+    calls = _count_both(monkeypatch)
+    onboarding.offer_desktop_shortcuts()
+    assert calls == {"make_notes": 1, "feedback": 1}
+    out = capsys.readouterr().out
+    # Both are reported on their own line — one combined confirm, two outcomes.
+    assert "Added a Make Notes shortcut" in out
+    assert "Added a Send Feedback shortcut" in out
 
 
 def test_shortcut_offer_defaults_to_yes_on_enter(monkeypatch):
     monkeypatch.setattr(builtins, "input", lambda _p="": "")
-    calls = {"n": 0}
-    monkeypatch.setattr(
-        winlaunch, "create_feedback_shortcut", lambda: calls.__setitem__("n", calls["n"] + 1) or True
-    )
-    onboarding.offer_feedback_shortcut()
-    assert calls["n"] == 1
+    calls = _count_both(monkeypatch)
+    onboarding.offer_desktop_shortcuts()
+    assert calls == {"make_notes": 1, "feedback": 1}
+
+
+def test_shortcut_offer_reports_each_independently(monkeypatch, capsys):
+    # One failing must not hide the other: Make Notes fails, Send Feedback succeeds —
+    # both are attempted and each reports its own outcome.
+    monkeypatch.setattr(builtins, "input", lambda _p="": "y")
+    calls = _count_both(monkeypatch, make_notes=False, feedback_ok=True)
+    onboarding.offer_desktop_shortcuts()
+    assert calls == {"make_notes": 1, "feedback": 1}
+    out = capsys.readouterr().out
+    assert "Couldn't create the Make Notes shortcut" in out
+    assert "Added a Send Feedback shortcut" in out
 
 
 def test_shortcut_offer_declines_on_no(monkeypatch):
     monkeypatch.setattr(builtins, "input", lambda _p="": "n")
 
     def must_not_create():
-        raise AssertionError("must not create the shortcut when the user declines")
+        raise AssertionError("must not create a shortcut when the user declines")
 
+    monkeypatch.setattr(winlaunch, "create_make_notes_shortcut", must_not_create)
     monkeypatch.setattr(winlaunch, "create_feedback_shortcut", must_not_create)
-    onboarding.offer_feedback_shortcut()  # no exception → declined cleanly
+    onboarding.offer_desktop_shortcuts()  # no exception → declined cleanly
 
 
 # --- onboard: end-to-end flow stitches the steps together -------------------------
@@ -328,6 +353,7 @@ def test_onboard_full_optin_flow_stores_everything(isolated_config, monkeypatch,
         "input",
         _scripted_input(["sk-ant-onboard", "ghp_tok", "Grace", "y"]),
     )
+    monkeypatch.setattr(winlaunch, "create_make_notes_shortcut", lambda: True)
     monkeypatch.setattr(winlaunch, "create_feedback_shortcut", lambda: True)
     onboarding.onboard()
     out = capsys.readouterr().out
@@ -345,6 +371,7 @@ def test_onboard_key_then_skip_feedback(isolated_config, monkeypatch, capsys):
     def must_not_create():
         raise AssertionError("shortcut offer must not run when feedback was skipped")
 
+    monkeypatch.setattr(winlaunch, "create_make_notes_shortcut", must_not_create)
     monkeypatch.setattr(winlaunch, "create_feedback_shortcut", must_not_create)
     onboarding.onboard()
     out = capsys.readouterr().out
