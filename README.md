@@ -338,6 +338,15 @@ Any language is accepted — there is no fixed supported list, so anything the m
 can write, you can ask for. A clearly-odd value gets a soft warning but still runs.
 Leaving it at `en` (or English) produces exactly the same output as before.
 
+**It also offers to translate when the source isn't your language.** As it extracts,
+`tnotes` notes each page's language (for free — the model is already reading the page).
+If the document turns out to be written in a different language from your preferred one,
+it asks before exporting — *"This document looks like cs. Write the notes in en? [Y/n]"* —
+and only translates the reader prose if you say yes. The offer is advisory: it never
+blocks, declining just keeps the notes in the document's own language, and a
+non-interactive run (piped, redirected, or automated) skips the prompt and stays native.
+Passing `--language` explicitly is itself the answer — it translates without asking.
+
 On first run, the bootstrap flow (the friendly screen a Windows double-click shows)
 offers your operating system's language as a one-tap default — press Enter to accept,
 or type a different code. That seed happens once; a returning user is never re-asked.

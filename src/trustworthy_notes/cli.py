@@ -283,10 +283,32 @@ def run(
     def log(msg: str) -> None:
         typer.echo(msg, err=True)
 
+    # The translate gate's confirm prompt (ADR-008): asked only when a human can answer.
+    # Windowless launches read stdin directly (the console is real but not a TTY pair the
+    # CliRunner-style check passes); terminal runs use _interactive(). A non-interactive
+    # run leaves this False, so the gate declines and produces native output. Pipeline
+    # only calls this when the detected source language differs from the preferred one.
+    def confirm_translation(detected: str, preferred: str) -> bool:
+        prompt = (
+            f"\nThis document looks like {detected}. "
+            f"Write the notes in {preferred}? [Y/n]: "
+        )
+        if windowless:
+            try:
+                answer = input(prompt).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return False
+        elif _interactive():
+            answer = typer.prompt(prompt, default="Y", show_default=False).strip().lower()
+        else:
+            return False  # piped/redirected/CI → don't prompt, fall back to native
+        return answer in ("", "y", "yes")
+
     try:
         book_pdf = pipeline.run(
             pdf, pages=pages, force=force, cite=cite, keep_md=md,
             model=model, effort=effort, max_tokens=max_tokens, language=language,
+            confirm_translation=confirm_translation,
             log=log, parse_pages=_parse_pages
         )
     except ValueError as exc:

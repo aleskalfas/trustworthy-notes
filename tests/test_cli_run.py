@@ -41,7 +41,8 @@ def test_bare_pdf_routes_to_orchestrator(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_run(pdf, *, pages, force, cite, keep_md, model, effort, max_tokens, language, log, parse_pages):
+    def fake_run(pdf, *, pages, force, cite, keep_md, model, effort, max_tokens, language,
+                 confirm_translation, log, parse_pages):
         seen.update(pdf=Path(pdf), pages=pages, force=force, cite=cite, keep_md=keep_md,
                     model=model, effort=effort, max_tokens=max_tokens, language=language)
         return pdf.parent / "Foo.tnotes.pdf"
@@ -65,7 +66,8 @@ def test_bare_pdf_threads_pages_force_cite(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_run(pdf, *, pages, force, cite, keep_md, model, effort, max_tokens, language, log, parse_pages):
+    def fake_run(pdf, *, pages, force, cite, keep_md, model, effort, max_tokens, language,
+                 confirm_translation, log, parse_pages):
         seen.update(pages=pages, force=force, cite=cite, keep_md=keep_md,
                     model=model, effort=effort, max_tokens=max_tokens, language=language)
         return pdf.parent / "out.pdf"
@@ -80,6 +82,28 @@ def test_bare_pdf_threads_pages_force_cite(tmp_path, monkeypatch):
     assert seen == {"pages": "1-30", "force": True, "cite": True, "keep_md": True,
                     "model": "claude-opus-4-6", "effort": "high", "max_tokens": 64000,
                     "language": "cs"}
+
+
+def test_confirm_translation_is_passed_and_declines_non_interactively(tmp_path, monkeypatch):
+    # #115: the CLI builds a TTY-gated confirm callable and hands it to pipeline.run.
+    # Under CliRunner the streams aren't TTYs (and it's not a windowless launch), so the
+    # callable declines without prompting — the documented non-interactive behaviour.
+    src = tmp_path / "Foo.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+
+    captured = {}
+
+    def fake_run(pdf, *, confirm_translation, **kw):
+        captured["confirm"] = confirm_translation
+        return pdf.parent / "Foo.tnotes.pdf"
+
+    monkeypatch.setattr("trustworthy_notes.pipeline.run", fake_run)
+    monkeypatch.setattr(cli.config, "auth_source", lambda: "config")
+
+    res = runner.invoke(cli.app, [str(src)])
+    assert res.exit_code == 0, res.stdout
+    # the gate would call confirm(detected, preferred); non-interactive → declines
+    assert captured["confirm"]("cs", "en") is False
 
 
 def test_bare_pdf_requires_auth(tmp_path, monkeypatch):

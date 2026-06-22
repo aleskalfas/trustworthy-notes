@@ -17,6 +17,11 @@
     "generation": {
       "$ref": "#/$defs/generation"
     },
+    "detected_language": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The page's dominant language as a short ISO-ish code (e.g. 'en', 'cs', 'ja'), reported by the extractor as it reads the page (ADR-008, issue #115). A per-page provenance fact, like 'generation': captured free at extraction, carried verbatim through the anchor gate and compose, and rolled up to a per-doc source language for the advisory translate-offer gate. Optional and additive: notes made before this field read as 'unknown' (no schema_version bump — per-page notes are regenerable application output, not adopter state). It records the SOURCE language only; it never drives any §7 anchor check."
+    },
     "terms": {
       "type": "array",
       "items": {"$ref": "#/$defs/term"},

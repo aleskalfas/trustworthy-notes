@@ -80,6 +80,29 @@ def test_assemble_assigns_ids_and_links():
     assert notes["relations"][0] == {"from": "s-2", "to": "s-1", "type": "contrasts"}
 
 
+def test_assemble_captures_detected_language_from_intermediate():
+    # #115: the model reports the page's dominant language; assemble surfaces it onto
+    # the notes-set as a top-level field (blank/absent → omitted).
+    raw = {
+        "detected_language": " CS ",
+        "statements": [
+            {"key": "s1", "type": "claim", "text": "x",
+             "evidence": [{"excerpt": "the king", "source": "body"}]},
+        ],
+    }
+    notes = assemble(raw)
+    assert notes["detected_language"] == "CS"  # stripped, original case preserved here
+
+
+def test_assemble_omits_detected_language_when_blank_or_absent():
+    assert "detected_language" not in assemble({"statements": []})
+    assert "detected_language" not in assemble({"detected_language": "  ", "statements": []})
+
+
+def test_intermediate_schema_declares_detected_language():
+    assert "detected_language" in _INTERMEDIATE_SCHEMA["properties"]
+
+
 def test_extractor_end_to_end_clean(monkeypatch):
     page = PageText(page_index=0, page_number=1, text="The cat sat on the mat.", width=1.0, height=1.0)
     payload = {
