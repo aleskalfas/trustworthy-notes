@@ -37,6 +37,39 @@ diff cleanly. To compare two runs, **check the fingerprints match first** (corpu
 hash + tool version) — a number that improved under a *different* instrument is not
 a real improvement.
 
+## Tuning the extraction defaults (the sweep)
+
+The point of the yardstick is to settle *which settings* produce the best notes,
+empirically, instead of guessing. The two levers the pipeline exposes are the
+**model** and the reasoning **effort** (the one-command run defaults to Sonnet +
+`effort=low`). Both can be overridden per run with flags, so you can regenerate a
+corpus at each setting without touching config:
+
+```
+tnotes ./doc.pdf --effort low      --force
+tnotes ./doc.pdf --effort medium   --force
+tnotes ./doc.pdf --effort high     --force
+tnotes ./doc.pdf --model claude-opus-4-6 --effort high --force
+```
+
+`--force` is essential — it regenerates the notes (otherwise finished stages are
+reused and the setting change has no effect). The procedure:
+
+1. Pick a small fixed set of documents you know well (your private corpus).
+2. For each setting, regenerate the notes with the flags above, then run
+   `tnotes eval --corpus <dir> --json score-<setting>.json`.
+3. Compare the **floor-scores** across settings — a worse setting often shows up
+   mechanically (lower anchoring/grounding rates: the model invented or mangled
+   quotes).
+4. The floor can't see *mischaracterization* (a real quote, wrongly described), so
+   also apply the **spot-check rubric** below on a few pages per setting.
+5. If a setting clearly wins on both, change the default (`DEFAULT_EFFORT` /
+   `DEFAULT_MODEL` in `config.py`) and record the finding. A default change is a
+   deliberate follow-up, justified by the sweep — not a guess.
+
+Cost note: higher effort and Opus cost more per page; the sweep is a one-off
+maintainer experiment, not something the end user runs.
+
 ## The corpus
 
 A corpus is a directory of **document subfolders**. Each doc folder carries the

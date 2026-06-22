@@ -209,6 +209,16 @@ def run(
         False, "--md",
         help="Also write the Markdown book (<stem>.tnotes.md) beside the PDF.",
     ),
+    model: str = typer.Option(
+        None, "--model",
+        help="Override the extraction model for this run (else config/default Sonnet). "
+        "Mainly for tuning quality against `tnotes eval`.",
+    ),
+    effort: str = typer.Option(
+        None, "--effort",
+        help="Override the reasoning effort for this run: low/medium/high (else config/default). "
+        "Mainly for tuning quality against `tnotes eval`.",
+    ),
 ):
     """One-command book generation: run the whole pipeline on a bare PDF.
 
@@ -217,6 +227,10 @@ def run(
     already finished, and writes the finished book beside the source as a single
     <stem>[.pRANGE].tnotes.pdf (clean prose by default; --cite for the anchored copy,
     --md to also keep the Markdown).
+
+    `--model`/`--effort` override the extraction settings for this run (absent →
+    the configured values, unchanged); they exist mainly to sweep quality against
+    `tnotes eval`.
     """
     from . import onboarding, pipeline, winlaunch
 
@@ -260,7 +274,8 @@ def run(
 
     try:
         book_pdf = pipeline.run(
-            pdf, pages=pages, force=force, cite=cite, keep_md=md, log=log, parse_pages=_parse_pages
+            pdf, pages=pages, force=force, cite=cite, keep_md=md,
+            model=model, effort=effort, log=log, parse_pages=_parse_pages
         )
     except ValueError as exc:
         typer.echo(f"tnotes: {exc}", err=True)
