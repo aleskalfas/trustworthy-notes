@@ -1995,19 +1995,37 @@ def eval_cmd(
         f"tool {fp.tool_version}  at {fp.generated_at}"
     )
     typer.echo("")
-    typer.echo(f"{'anchored':>10} {'grounded':>10} {'excerpts':>9} {'stmts':>7} {'ref':>4} {'schema':>6}  doc")
+    typer.echo(
+        f"{'anchored':>10} {'grounded':>10} {'excerpts':>9} {'stmts':>7} {'ref':>4} "
+        f"{'schema':>6}  {'notes':>9}  doc"
+    )
+    incomplete = [d for d in score.docs if not d.is_complete]
     for d in score.docs:
         c = d.counts
+        # The completeness column: present/expected note-pages, then the MISSING list
+        # (failed/un-extracted pages) for any doc that lost pages — the exact thing a
+        # sweep with failures produces, and the floor must never hide (ADR-007).
+        notes_col = f"{c.pages_present:>4}/{c.pages_expected:<4}"
+        missing = f"  MISSING {d.missing_pages}" if d.missing_pages else ""
         typer.echo(
             f"{c.anchored_rate:>9.0%} {c.grounded_rate:>10.0%} "
             f"{c.excerpts_anchored:>4}/{c.excerpts_total:<4} {c.statements_total:>7} "
-            f"{c.referential_problems:>4} {c.schema_problems:>6}  {d.doc_id}"
+            f"{c.referential_problems:>4} {c.schema_problems:>6}  {notes_col}  {d.doc_id}{missing}"
         )
     typer.echo("")
     typer.echo(
         f"AGGREGATE  anchored {agg.anchored_rate:.1%}  grounded {agg.grounded_rate:.1%}  "
+        f"complete {agg.complete_rate:.1%} ({agg.pages_present}/{agg.pages_expected} expected pages)  "
         f"({agg.excerpts_anchored}/{agg.excerpts_total} excerpts, {agg.statements_grounded}/{agg.statements_total} statements)"
     )
+    if incomplete:
+        # Loud and explicit: an incomplete corpus is NOT a clean pass, even if every
+        # note that exists anchors. This is the stale/failed-sweep signal (ADR-007).
+        names = ", ".join(d.doc_id for d in incomplete)
+        typer.echo(
+            f"  INCOMPLETE: {len(incomplete)} doc(s) missing expected pages ({names}) "
+            "— this corpus does NOT read as a clean 100%; pages failed or were not extracted."
+        )
     if agg.referential_problems or agg.schema_problems:
         typer.echo(
             f"  floor problems: {agg.referential_problems} referential, {agg.schema_problems} schema"
@@ -2085,6 +2103,74 @@ def eval_add_page_cmd(
             f"NEXT: paste the real page text into `text:` in {result.source_pages_file} "
             "(the `# excerpt:` comments list what the notes quote). Until then this doc "
             "will not anchor — the floor needs the real source stream (ADR-007)."
+        )
+
+
+@app.command(name="eval-add-doc", hidden=True)
+def eval_add_doc_cmd(
+    doc: Path = typer.Option(
+        ..., "--doc", "-d", exists=True, dir_okay=False,
+        help="The source document to capture into the corpus (its `.tnotes` notes + source).",
+    ),
+    corpus: Path = typer.Option(
+        None, "--corpus", "-c", file_okay=False,
+        help="Corpus dir to add the doc to. Defaults to your private `eval_corpus_dir`.",
+    ),
+    doc_id: str = typer.Option(
+        None, "--doc-id",
+        help="Corpus doc name (defaults to the source filename, e.g. 'Foo.pdf').",
+    ),
+    notes_dir: Path = typer.Option(
+        None, "--notes-dir", file_okay=False,
+        help="Override where the document's `.tnotes` notes live (default: beside the doc).",
+    ),
+):
+    """Maintainer instrument: capture a whole generated doc into the floor-score corpus (#92).
+
+    The real corpus-build path for `tnotes eval` (ADR-007). It copies the doc's per-page
+    notes into the corpus layout `tnotes eval` scores, AND reads the source pages to
+    write a `source-pages.yaml` carrying the real `text`/`footnotes` (so §7.2 anchoring
+    is honest) plus an `expected_notes` marker per page (whether it is a text page the
+    pipeline extracts). That expected-page set is the completeness denominator: `eval`
+    compares it against the pages that actually have notes, so a partial or
+    stale-contaminated run can never read as a clean 100%.
+
+    Unlike `eval-add-page` (the single-page feedback-capture path, which leaves `text:`
+    empty for you to paste), this reads the real source streams from the PDF directly —
+    cli-side, preserving `eval`'s no-pipeline-import isolation. See docs/EVAL.md.
+    """
+    from . import eval_adddoc
+
+    corpus_dir = corpus or config.get_eval_corpus_dir()
+    if not corpus_dir:
+        typer.echo(
+            "no corpus given — pass --corpus or set `eval_corpus_dir` "
+            "(`tnotes config set-eval-corpus-dir <path>`).",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    try:
+        result = eval_adddoc.capture_doc(
+            doc=doc, corpus_dir=Path(corpus_dir), doc_id=doc_id, notes_dir=notes_dir,
+        )
+    except FileNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Captured {len(result.pages_captured)} page(s) of notes into corpus doc: "
+        f"{result.doc_dir}"
+    )
+    typer.echo(
+        f"Wrote source streams + expected-page markers ({len(result.expected_pages)} "
+        f"expected text page(s)) → {result.source_pages_file}"
+    )
+    if result.missing_pages:
+        typer.echo(
+            f"INCOMPLETE: {len(result.missing_pages)} expected page(s) have no notes "
+            f"(MISSING {result.missing_pages}) — re-extract them, or this doc scores "
+            "as incomplete (the floor surfaces the gap, never hides it; ADR-007)."
         )
 
 
