@@ -260,7 +260,7 @@ tnotes INPUT.pdf --md            # also keep the Markdown (INPUT.tnotes.md) besi
 tnotes INPUT.pdf --force         # regenerate every stage (default: skip finished ones)
 tnotes INPUT.pdf --model M --effort high   # override extraction settings (tuning; see docs/EVAL.md)
 tnotes INPUT.pdf --effort high --max-tokens 64000   # raise the budget if dense pages fail at high effort
-tnotes INPUT.pdf --language cs             # set your preferred reading language for this run (see below)
+tnotes INPUT.pdf --language cs             # write the study notes in your reading language (see below)
 ```
 
 Already-finished stages are skipped, so a re-run resumes where it left off (use
@@ -314,9 +314,11 @@ API key (see Platform below); setting them never touches the saved key.
 ### Choosing your reading language
 
 `tnotes` tracks a **preferred reading language** — the language you'd like to study
-your notes in. It is the basis for an upcoming reading-layer feature that offers to
-translate the synthesized study prose when a document is in another language, while
-always leaving the verbatim source quotes untouched (the provenance guarantee; see
+your notes in. The synthesized study notes (the reader prose and its headings) are
+written in that language, so you read in the language you think in. The verbatim
+source quotes in *Notes & Sources* are always left untouched in their original
+language — that is the provenance guarantee, and translating the reading prose never
+weakens it (the quotes are still the source's own words; see
 `docs/architecture/decisions/ADR-008-translation-trust-boundary.md`).
 
 The preferred language resolves in layers, most specific first:
@@ -328,16 +330,17 @@ The preferred language resolves in layers, most specific first:
 ```
 tnotes config set-language cs   # set your default reading language (a short code: en, cs, ja, …)
 tnotes config show              # show the resolved language and where it comes from
-tnotes INPUT.pdf --language ja  # override it for a single run
+tnotes INPUT.pdf --language ja  # write the study notes in Japanese for a single run
+tnotes export INPUT.pdf -l ja   # the same on the per-stage export command
 ```
+
+Any language is accepted — there is no fixed supported list, so anything the model
+can write, you can ask for. A clearly-odd value gets a soft warning but still runs.
+Leaving it at `en` (or English) produces exactly the same output as before.
 
 On first run, the bootstrap flow (the friendly screen a Windows double-click shows)
 offers your operating system's language as a one-tap default — press Enter to accept,
 or type a different code. That seed happens once; a returning user is never re-asked.
-
-> Note: this release wires the preferred language through end to end; the actual
-> translation offer is a follow-up. Setting it now does no harm and means it's ready
-> when translation lands.
 
 ### Cost estimates
 

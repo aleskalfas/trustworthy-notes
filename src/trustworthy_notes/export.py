@@ -14,6 +14,7 @@ same grounded digest.
 from __future__ import annotations
 
 import re
+from typing import Callable, Optional
 
 import anthropic
 
@@ -25,6 +26,42 @@ _SYSTEM = (
     "do not add facts or outside knowledge. Cite the note ids you draw on inline like "
     "[s-5]; cite the real ids given to you. Write so a person can LEARN the material."
 )
+
+# Common values that read as "the reader wants English, write as today". When the
+# resolved language is one of these we make NO prompt change at all — the English
+# path is byte-for-byte unchanged (no regression). Any other value is a target.
+_DEFAULT_LANGUAGES = frozenset({"en", "en-us", "en-gb", "english"})
+
+# Reasonable shape of a language code/name; anything outside it is *accepted* (no
+# allowlist, per ADR-008) but soft-warned as possibly-unintended. We never block.
+_PLAUSIBLE_LANGUAGE = re.compile(r"^[a-zA-Z]{2,}(?:[-_][a-zA-Z0-9]{2,})?$")
+
+
+def _language_directive(language: str) -> str:
+    """The instruction appended to the synthesis prompt when a non-English target
+    language is requested. The model writes the reader prose AND the invented
+    ``##``/``###`` headings in that language; the ``[s-N]`` citation markers and any
+    note ids are ascii tokens, NOT prose, and must survive verbatim (ADR-008)."""
+    return (
+        f"\n\nWRITE THE STUDY NOTES IN {language}: all prose and every `##`/`###` heading "
+        f"you invent must be in {language}. This is a re-representation of the SAME notes — "
+        "use ONLY the provided notes, add nothing, and keep citing the real note ids. "
+        "The `[s-N]` citation markers and note ids are literal ascii tokens, NOT prose: "
+        "reproduce them EXACTLY (e.g. `[s-5]`), never translate or transliterate them."
+    )
+
+
+def _is_default_language(language: Optional[str]) -> bool:
+    """True when ``language`` means 'write in English as today' — None, empty, or a
+    common English spelling. Used to keep the English path a strict no-op."""
+    return not language or language.strip().lower() in _DEFAULT_LANGUAGES
+
+
+def _warn_if_unusual(language: str, warn: Optional[Callable[[str], None]]) -> None:
+    """Soft-warn (never block) when a target language looks malformed — a typo guard
+    only. ADR-008 keeps NO allowlist, so any well-formed value passes silently."""
+    if warn and not _PLAUSIBLE_LANGUAGE.match(language.strip()):
+        warn(f"language {language!r} looks unusual; passing it through to synthesis anyway")
 
 _STYLES = {
     "outline": (
@@ -138,22 +175,39 @@ def _notes_appendix(cset: dict, cited: set[str]) -> str:
 
 def study_document(
     cset: dict, *, style: str = "outline", client: "anthropic.Anthropic", model: str,
-    effort: str = "low", max_tokens: int = 4000,
+    effort: str = "low", max_tokens: int = 4000, language: Optional[str] = None,
+    warn: Optional[Callable[[str], None]] = None,
 ) -> dict:
     """Synthesize a study document from one chapter notes-set.
 
     Returns ``{markdown, cited, unknown}`` — the document (with a resolved Sources
     section appended), the set of cited statement ids, and any cited ids that do
-    NOT exist in the chapter (a faithfulness flag)."""
+    NOT exist in the chapter (a faithfulness flag).
+
+    ``language`` is the reader's resolved preferred language. When it is None or an
+    English spelling the synthesis prompt is unchanged — the English path is
+    byte-for-byte as before. For any other target the prompt gains a directive to
+    write the reader prose AND the invented ``##``/``###`` headings in that language,
+    while still drawing ONLY on the provided notes and citing the real ``[s-N]`` ids
+    verbatim. This is the safe reader-layer translation seam: extraction stays native
+    and the anchored excerpts are never touched (ADR-008). ``warn`` (optional) is a
+    sink for a soft, non-blocking warning when a target value looks malformed."""
     if style not in _STYLES:
         raise ValueError(f"unknown style {style!r}; have {sorted(_STYLES)}")
+    # The English/None path adds nothing to the prompt (strict no-op, no regression);
+    # a target language appends the write-in-<language> directive and soft-warns on a
+    # malformed value (never blocking — no allowlist, per ADR-008).
+    instruction = _STYLES[style]
+    if not _is_default_language(language):
+        _warn_if_unusual(language, warn)
+        instruction += _language_directive(language)
     output_config: dict = {}
     if effort:
         output_config["effort"] = effort
     with client.messages.stream(
         model=model, max_tokens=max_tokens, thinking={"type": "adaptive"},
         system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": _STYLES[style] + "\n\nNOTES:\n" + _digest(cset)}],
+        messages=[{"role": "user", "content": instruction + "\n\nNOTES:\n" + _digest(cset)}],
         **({"output_config": output_config} if output_config else {}),
     ) as stream:
         response = stream.get_final_message()

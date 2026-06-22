@@ -1102,6 +1102,12 @@ def export(
         help="Effort for synthesis. Resolves: this flag > `effort:` in config > built-in "
         f"({config.DEFAULT_EFFORT}). Use '' for models without an effort knob.",
     ),
+    language: str = typer.Option(
+        None, "--language", "-l",
+        help="Write the study notes in this language as a short code (e.g. en, cs, ja). "
+        "Resolves: this flag > `language:` in config > built-in (en). The reader prose "
+        "and headings render in it; the verbatim quotes stay native (ADR-008).",
+    ),
     pdf: bool = typer.Option(
         False, "--pdf",
         help="Also render an interactive PDF (bookmarks + clickable Contents + [s-N] links) beside the .md.",
@@ -1119,11 +1125,16 @@ def export(
     plain text). Writes 4-export/chapter-NNN.<style>.md, and with --pdf an
     interactive PDF beside it. Prose chapters only by default (--all for reference
     sections). Skips chapters already done unless --force. Run `tnotes assemble` first.
+
+    `--language` writes the reader prose and headings in your preferred language
+    (resolves flag > config > en); the verbatim quotes in Notes & Sources stay in
+    the source language (ADR-008).
     """
     from . import compose, export as exp
 
     model = config.resolve_model(model)
     effort = config.resolve_effort(effort)
+    language = config.resolve_language(language)
     notes_dir = workspace.work_dir(input, notes_dir)
     if config.auth_source() == "none":
         typer.echo("export needs Claude; run `tnotes auth set-key` first.", err=True)
@@ -1164,7 +1175,10 @@ def export(
             title = cset.get("source", {}).get("chapter_title", f.name)
             typer.echo(f"exporting chapter {num:03d} ({title}) [{style}]…", err=True)
             try:
-                res = exp.study_document(cset, style=style, client=client, model=model, effort=effort)
+                res = exp.study_document(
+                    cset, style=style, client=client, model=model, effort=effort,
+                    language=language, warn=lambda msg: typer.echo(msg, err=True),
+                )
             except Exception as exc:
                 typer.echo(f"  FAILED chapter {num}: {exc}", err=True)
                 continue

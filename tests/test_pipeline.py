@@ -238,6 +238,21 @@ def test_language_flag_resolves_and_threads_to_export(tmp_path, stub_pipeline, m
     assert seen["language"] == "cs"  # explicit flag wins
 
 
+def test_export_forwards_language_to_study_document(tmp_path, stub_pipeline, monkeypatch):
+    # #112: _export must hand the resolved language to export.study_document (the call
+    # that synthesizes the reader prose), not just accept it.
+    seen = {}
+
+    def capturing_study(cset, **kw):
+        seen.update(kw)
+        return {"markdown": "## P\n- a [s-1](#note-s-1)\n", "cited": {"s-1"}, "unknown": []}
+
+    monkeypatch.setattr(pipeline.exp, "study_document", capturing_study)
+    src = _src(tmp_path)
+    pipeline.run(src, language="cs", parse_pages=_parse_pages)
+    assert seen["language"] == "cs"
+
+
 def test_language_absent_resolves_via_config_default(tmp_path, stub_pipeline, monkeypatch):
     # #114: with no flag, the resolver falls through to the configured value (here
     # stubbed to "ja"); resolution lives in pipeline.run, not the CLI edge.

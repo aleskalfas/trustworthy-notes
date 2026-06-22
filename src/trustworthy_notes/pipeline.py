@@ -231,10 +231,9 @@ def _export(input_path, work, force, style, model, effort, api_key, log, *, lang
     """Wave 4: per-chapter study documents. ``prose_only`` is off (the ``--all``
     behaviour) so a single-section document still exports.
 
-    ``language`` is the resolved preferred reading language, threaded here because
-    the reading/export layer is where translation lives (ADR-008). It is accepted
-    now and not yet consumed — the confirm-then-translate offer is task #112; this
-    keeps the seam in place so wiring it up there is a one-spot change."""
+    ``language`` is the resolved preferred reading language, forwarded to
+    ``study_document`` so the synthesized reader prose and headings render in it
+    (ADR-008). A None/English value leaves the English path unchanged."""
     import anthropic
 
     src_dir = workspace.compose_stage_dir(work, "chapters")
@@ -264,7 +263,8 @@ def _export(input_path, work, force, style, model, effort, api_key, log, *, lang
         cset = yaml.safe_load(f.read_text(encoding="utf-8"))
         title = cset.get("source", {}).get("chapter_title", f.name)
         try:
-            res = exp.study_document(cset, style=style, client=client, model=model, effort=effort)
+            res = exp.study_document(cset, style=style, client=client, model=model,
+                                     effort=effort, language=language, warn=log)
         except Exception as exc:
             log(f"  chapter {num} ({title}) FAILED: {exc} — continuing")
             continue

@@ -10,6 +10,9 @@ from trustworthy_notes.export import study_document
 class _FakeClient:
     def __init__(self, text: str):
         message = SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason="end_turn")
+        # The kwargs the last stream() call received — lets a test assert the
+        # system + user prompt that was actually sent to the model.
+        self.sent: dict = {}
 
         class _Stream:
             def __enter__(s):
@@ -21,7 +24,17 @@ class _FakeClient:
             def get_final_message(s):
                 return message
 
-        self.messages = SimpleNamespace(stream=lambda **kw: _Stream())
+        def _stream(**kw):
+            self.sent = kw
+            return _Stream()
+
+        self.messages = SimpleNamespace(stream=_stream)
+
+    def user_prompt(self) -> str:
+        return self.sent["messages"][0]["content"]
+
+    def system_prompt(self) -> str:
+        return self.sent["system"][0]["text"]
 
 
 def _cset():
@@ -82,6 +95,63 @@ def test_export_flags_stray_citations():
     assert res["cited"] == {"s-1"}
     assert "⚠" in res["markdown"]
     assert "[s-99](#note-s-99)" not in res["markdown"]            # stray not linked
+
+
+def _user_prompt_for(language, *, body="## S\n- point [s-1]", warn=None):
+    """Run study_document with a language and return (client, result) so a test can
+    inspect the exact prompt sent and the resolved output."""
+    client = _FakeClient(body)
+    res = study_document(_cset(), client=client, model="m", language=language, warn=warn)
+    return client, res
+
+
+def test_language_directive_enters_the_prompt():
+    # #112: a non-English target appends a write-in-<language> directive to the user
+    # prompt; the system prompt is unchanged (the directive rides the style message).
+    client, _ = _user_prompt_for("Czech")
+    prompt = client.user_prompt()
+    assert "WRITE THE STUDY NOTES IN Czech" in prompt
+    assert "every `##`/`###` heading" in prompt          # prose AND invented headings
+    assert "ascii tokens" in prompt                       # [s-N] preserved verbatim
+    assert "use ONLY the provided notes" in prompt        # faithfulness unchanged
+    assert "NOTES:" in prompt                             # the digest still follows
+
+
+def test_english_and_none_leave_the_prompt_byte_for_byte_unchanged():
+    # Regression guard: the default path adds NOTHING. Capture the no-language prompt,
+    # then assert every English spelling and None produce the identical bytes.
+    baseline = _user_prompt_for(None)[0].user_prompt()
+    for lang in (None, "", "en", "en-US", "English", "english"):
+        assert _user_prompt_for(lang)[0].user_prompt() == baseline, lang
+        # and never the directive marker
+        assert "WRITE THE STUDY NOTES IN" not in _user_prompt_for(lang)[0].user_prompt()
+
+
+def test_translated_output_still_resolves_citations():
+    # The [s-N] linking is language-agnostic: even with surrounding prose in another
+    # language (the model would write it; here we just stand in non-ascii prose), the
+    # citation still resolves to its anchored note.
+    body = "## Téma\n- tvrzení s důkazem [s-1, s-2]"
+    _, res = _user_prompt_for("cs", body=body)
+    md = res["markdown"]
+    assert "[s-1](#note-s-1), [s-2](#note-s-2)" in md   # citations linked regardless of prose
+    assert res["cited"] == {"s-1", "s-2"}
+    assert '<a id="note-s-1"></a>' in md
+
+
+def test_unusual_language_soft_warns_but_still_runs():
+    # ADR-008: no allowlist. A malformed value warns (once) yet is passed through.
+    warnings: list[str] = []
+    client, res = _user_prompt_for("??!", warn=warnings.append)
+    assert warnings and "unusual" in warnings[0]
+    assert "WRITE THE STUDY NOTES IN ??!" in client.user_prompt()   # not blocked
+    assert res["markdown"]                                          # produced output
+
+
+def test_plausible_language_does_not_warn():
+    warnings: list[str] = []
+    _user_prompt_for("ja", warn=warnings.append)
+    assert warnings == []
 
 
 def test_strip_citations_removes_inline_cites_and_appendix():
