@@ -2179,5 +2179,145 @@ def eval_add_doc_cmd(
         )
 
 
+@app.command(name="eval-compare", hidden=True)
+def eval_compare_cmd(
+    files: list[Path] = typer.Argument(
+        ..., exists=True, dir_okay=False,
+        help="Two or more floor-score JSON files (from `tnotes eval --json`), in order.",
+    ),
+    labels: list[str] = typer.Option(
+        None, "--label", "-l",
+        help="A label per file, in order (e.g. --label low --label high). "
+        "When omitted or fewer than files, the JSON filename stem is used.",
+    ),
+):
+    """Maintainer instrument: print a labelled delta table across 2+ floor-score JSONs.
+
+    The low-vs-high tuning sweep as a glance, not a manual diff (#97). Reads scores
+    written by `tnotes eval --json`, lines them up as columns, and shows the first→last
+    delta on each metric (rates as percentage points; counts on the numerator, e.g.
+    statements 163 → 248 reads +85).
+
+    ADR-007 disciplines this preserves: a score is only comparable next to a matching
+    fingerprint, so if the runs' `corpus_hash` differ this leads with a loud NOT
+    COMPARABLE warning (they scored different documents, not different settings) — and
+    it surfaces any page-losing run, so a partial extraction can't look "better" for
+    having fewer-but-cleaner notes. Reading-only and import-isolated: no pipeline.
+    """
+    import json
+
+    from . import eval as eval_mod
+
+    if len(files) < 2:
+        typer.echo("eval-compare needs at least two score files to compare.", err=True)
+        raise typer.Exit(1)
+
+    labels = labels or []
+    labelled: list[tuple[str, dict]] = []
+    for i, path in enumerate(files):
+        # Label precedence: an explicit --label for this position, else the filename stem
+        # (so `score-low.json` reads as "score-low"). Falling back per-position means a
+        # partial label list (fewer --label than files) still labels every column.
+        label = labels[i] if i < len(labels) else path.stem
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            typer.echo(f"could not read {path}: {exc}", err=True)
+            raise typer.Exit(1)
+        try:
+            data = eval_mod.parse_score_dict(raw)
+        except eval_mod.NotAFloorScore as exc:
+            typer.echo(
+                f"{path} is not a floor-score JSON ({exc}) — "
+                "pass files written by `tnotes eval --json`.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        labelled.append((label, data))
+
+    comparison = eval_mod.compare_scores(labelled)
+    for line in _format_comparison(comparison):
+        typer.echo(line)
+
+
+def _format_comparison(comparison: "eval.Comparison") -> list[str]:  # noqa: F821
+    """Render a :class:`eval.Comparison` as an aligned plain-text table (no table libs).
+
+    Leads with the corpus-comparability line (the ADR-007 fingerprint guard): ✓ same
+    corpus, or ⚠ NOT COMPARABLE when the runs scored different documents. Then a column
+    per run, a row per metric with the first→last Δ, and an INCOMPLETE note for any
+    page-losing run so a partial extraction can never read as the cleaner result.
+    """
+    runs = comparison.runs
+    label_w = max([len("metric")] + [len(r.label) for r in runs] + [12])
+    col_w = max([8] + [len(r.label) for r in runs])
+    delta_w = 9
+
+    lines: list[str] = []
+    lines.append("=== tnotes eval-compare (floor-only instrument; never a gate — ADR-007) ===")
+    if comparison.comparable:
+        hash_ = comparison.corpus_hashes[0]
+        corpus = runs[0].corpus_id
+        lines.append(f"✓ same corpus: {corpus} (hash {hash_}) — runs are comparable.")
+    else:
+        lines.append(
+            "⚠ NOT COMPARABLE — different corpus (these are different documents, not "
+            "different settings)."
+        )
+        lines.append(
+            "  corpus hashes: "
+            + ", ".join(f"{r.label}={r.corpus_hash}" for r in runs)
+        )
+    lines.append("")
+
+    header = f"{'metric':<{label_w}}"
+    for r in runs:
+        header += f" {r.label:>{col_w}}"
+    header += f" {'Δ first→last':>{delta_w + 4}}"
+    lines.append(header)
+
+    for row in comparison.rows:
+        line = f"{row.label:<{label_w}}"
+        for cell in row.cells:
+            line += f" {_cell_text(cell):>{col_w}}"
+        line += f" {_delta_text(row):>{delta_w + 4}}"
+        lines.append(line)
+
+    lines.append("")
+    if comparison.any_incomplete:
+        # Loud: a page-losing run is NOT a clean comparison point, even if its present
+        # notes all anchor (the stale/failed-sweep trap ADR-007 exists to surface).
+        for r in runs:
+            if not r.complete:
+                docs = ", ".join(r.incomplete_docs)
+                lines.append(
+                    f"⚠ INCOMPLETE run '{r.label}': missing expected pages in {docs} "
+                    "— fewer-but-cleaner notes can look 'better'; this run lost pages."
+                )
+    else:
+        lines.append("all runs complete (no run lost expected pages).")
+    return lines
+
+
+def _cell_text(cell: "eval.CompareCell") -> str:  # noqa: F821
+    """One metric value for one run: a percent for a rate, ``n/m`` for a ratio."""
+    if cell.kind == "rate":
+        return "—" if cell.rate is None else f"{cell.rate:.0%}"
+    if cell.numerator is None or cell.denominator is None:
+        return "—"
+    return f"{cell.numerator}/{cell.denominator}"
+
+
+def _delta_text(row: "eval.CompareRow") -> str:  # noqa: F821
+    """The first→last delta, signed: percentage points for a rate, count for a ratio."""
+    if row.kind == "rate":
+        if row.delta_rate is None:
+            return "—"
+        return f"{row.delta_rate * 100:+.1f}pp"
+    if row.delta_numerator is None:
+        return "—"
+    return f"{row.delta_numerator:+d}"
+
+
 if __name__ == "__main__":
     app()

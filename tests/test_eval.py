@@ -443,6 +443,208 @@ def test_eval_report_shows_missing_for_incomplete_corpus(tmp_path):
     assert "INCOMPLETE" in result.output
 
 
+# --- eval-compare: labelled delta table (#97) ----------------------------------
+
+
+def _score_json(
+    path: Path,
+    *,
+    corpus_hash: str,
+    statements_grounded: int,
+    statements_total: int,
+    excerpts_anchored: int = 0,
+    excerpts_total: int = 0,
+    pages_present: int = 1,
+    pages_expected: int = 1,
+    missing: list[int] | None = None,
+) -> Path:
+    """Write a minimal-but-valid floor-score JSON (the shape `to_dict` emits) to ``path``.
+
+    Lets a compare test fix the counts directly without standing up a whole corpus. The
+    rates are derived the way `_counts_with_rates` would, so the artifact is consistent.
+    """
+    missing = missing or []
+    grounded_rate = 1.0 if statements_total == 0 else statements_grounded / statements_total
+    anchored_rate = 1.0 if excerpts_total == 0 else excerpts_anchored / excerpts_total
+    complete_rate = 1.0 if pages_expected == 0 else pages_present / pages_expected
+    data = {
+        "schema_version": eval_mod.SCORE_SCHEMA_VERSION,
+        "kind": "floor-only",
+        "fingerprint": {
+            "corpus_id": "my-corpus",
+            "corpus_hash": corpus_hash,
+            "generated_at": "2026-06-22T00:00:00+00:00",
+            "tool_version": "test-build",
+            "floor_counts": {},
+        },
+        "aggregate": {
+            "statements_total": statements_total,
+            "statements_grounded": statements_grounded,
+            "excerpts_total": excerpts_total,
+            "excerpts_anchored": excerpts_anchored,
+            "pages_expected": pages_expected,
+            "pages_present": pages_present,
+            "grounded_rate": grounded_rate,
+            "anchored_rate": anchored_rate,
+            "complete_rate": complete_rate,
+        },
+        "docs": [
+            {
+                "doc_id": "doc-a",
+                "complete": not missing,
+                "missing_pages": missing,
+            }
+        ],
+    }
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_compare_computes_first_to_last_deltas(tmp_path):
+    """Two compatible runs (same corpus_hash) → correct first→last count deltas."""
+    low = _score_json(
+        tmp_path / "low.json", corpus_hash="h1",
+        statements_grounded=163, statements_total=163,
+        excerpts_anchored=200, excerpts_total=210,
+    )
+    high = _score_json(
+        tmp_path / "high.json", corpus_hash="h1",
+        statements_grounded=248, statements_total=248,
+        excerpts_anchored=300, excerpts_total=305,
+    )
+
+    comparison = eval_mod.compare_scores([
+        ("low", json.loads(low.read_text())),
+        ("high", json.loads(high.read_text())),
+    ])
+
+    assert comparison.comparable
+    statements = next(r for r in comparison.rows if r.label == "statements")
+    assert statements.delta_numerator == 85  # 163 → 248
+    excerpts = next(r for r in comparison.rows if r.label == "excerpts")
+    assert excerpts.delta_numerator == 100  # 200 → 300
+
+
+def test_compare_through_cli_labels_from_filename(tmp_path):
+    """No --label → columns labelled by the JSON filename stem; deltas in the table."""
+    _score_json(tmp_path / "low.json", corpus_hash="h1",
+                statements_grounded=163, statements_total=163)
+    _score_json(tmp_path / "high.json", corpus_hash="h1",
+                statements_grounded=248, statements_total=248)
+
+    result = runner.invoke(
+        cli.app, ["eval-compare", str(tmp_path / "low.json"), str(tmp_path / "high.json")]
+    )
+    assert result.exit_code == 0, result.output
+    assert "low" in result.output and "high" in result.output
+    assert "+85" in result.output  # statements 163 → 248
+    assert "same corpus" in result.output
+
+
+def test_compare_through_cli_labels_from_option(tmp_path):
+    """--label overrides the filename stem, one per file in order."""
+    _score_json(tmp_path / "a.json", corpus_hash="h1",
+                statements_grounded=10, statements_total=10)
+    _score_json(tmp_path / "b.json", corpus_hash="h1",
+                statements_grounded=20, statements_total=20)
+
+    result = runner.invoke(cli.app, [
+        "eval-compare", str(tmp_path / "a.json"), str(tmp_path / "b.json"),
+        "--label", "effort-low", "--label", "effort-high",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "effort-low" in result.output and "effort-high" in result.output
+
+
+def test_compare_warns_when_corpus_hash_differs(tmp_path):
+    """Mismatched corpus_hash → the 'NOT COMPARABLE — different corpus' warning fires."""
+    _score_json(tmp_path / "x.json", corpus_hash="h1",
+                statements_grounded=10, statements_total=10)
+    _score_json(tmp_path / "y.json", corpus_hash="h2",
+                statements_grounded=99, statements_total=99)
+
+    comparison = eval_mod.compare_scores([
+        ("x", json.loads((tmp_path / "x.json").read_text())),
+        ("y", json.loads((tmp_path / "y.json").read_text())),
+    ])
+    assert not comparison.comparable
+
+    result = runner.invoke(
+        cli.app, ["eval-compare", str(tmp_path / "x.json"), str(tmp_path / "y.json")]
+    )
+    assert result.exit_code == 0, result.output
+    assert "NOT COMPARABLE" in result.output
+    assert "different corpus" in result.output
+
+
+def test_compare_surfaces_an_incomplete_run(tmp_path):
+    """A run with missing_pages is shown as incomplete, so a page-loser isn't hidden."""
+    _score_json(tmp_path / "full.json", corpus_hash="h1",
+                statements_grounded=100, statements_total=100,
+                pages_present=10, pages_expected=10)
+    _score_json(tmp_path / "partial.json", corpus_hash="h1",
+                statements_grounded=120, statements_total=120,
+                pages_present=5, pages_expected=10, missing=[5, 6, 7, 8, 9])
+
+    comparison = eval_mod.compare_scores([
+        ("full", json.loads((tmp_path / "full.json").read_text())),
+        ("partial", json.loads((tmp_path / "partial.json").read_text())),
+    ])
+    assert comparison.any_incomplete
+    partial = next(r for r in comparison.runs if r.label == "partial")
+    assert not partial.complete
+    assert "doc-a" in partial.incomplete_docs
+
+    result = runner.invoke(
+        cli.app, ["eval-compare", str(tmp_path / "full.json"), str(tmp_path / "partial.json")]
+    )
+    assert result.exit_code == 0, result.output
+    assert "INCOMPLETE" in result.output
+    assert "partial" in result.output
+
+
+def test_compare_errors_on_malformed_json(tmp_path):
+    """A malformed JSON file → a clean one-line error, not a traceback."""
+    good = _score_json(tmp_path / "good.json", corpus_hash="h1",
+                       statements_grounded=1, statements_total=1)
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ this is not valid json", encoding="utf-8")
+
+    result = runner.invoke(cli.app, ["eval-compare", str(good), str(bad)])
+    assert result.exit_code == 1
+    assert "could not read" in result.output.lower()
+
+
+def test_compare_errors_on_non_score_json(tmp_path):
+    """A well-formed JSON that isn't a floor score → a clean error (kind/version check)."""
+    good = _score_json(tmp_path / "good.json", corpus_hash="h1",
+                       statements_grounded=1, statements_total=1)
+    foreign = tmp_path / "foreign.json"
+    foreign.write_text(json.dumps({"hello": "world"}), encoding="utf-8")
+
+    result = runner.invoke(cli.app, ["eval-compare", str(good), str(foreign)])
+    assert result.exit_code == 1
+    assert "not a floor-score" in result.output.lower()
+
+
+def test_compare_parse_score_dict_rejects_wrong_version(tmp_path):
+    """A future schema_version is rejected rather than silently misread."""
+    import pytest
+
+    bad_version = {"kind": "floor-only", "schema_version": 999}
+    with pytest.raises(eval_mod.NotAFloorScore):
+        eval_mod.parse_score_dict(bad_version)
+
+
+def test_compare_needs_two_files(tmp_path):
+    """One file is not a comparison → a clear error, not a crash."""
+    good = _score_json(tmp_path / "only.json", corpus_hash="h1",
+                       statements_grounded=1, statements_total=1)
+    result = runner.invoke(cli.app, ["eval-compare", str(good)])
+    assert result.exit_code == 1
+    assert "two" in result.output.lower()
+
+
 # --- import isolation (ADR-007 Invariant 5) ------------------------------------
 
 
