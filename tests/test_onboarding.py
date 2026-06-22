@@ -260,6 +260,58 @@ def test_setup_feedback_short_circuits_when_token_configured(isolated_config, mo
     assert onboarding.setup_feedback() is True
 
 
+# --- seed_language: first-run-only OS-locale seed of the reading language (#114) ----
+
+
+def test_seed_language_offers_os_default_and_persists_on_enter(isolated_config, monkeypatch):
+    # #114: nothing configured → offer the OS-detected default; a bare Enter accepts it.
+    monkeypatch.setattr(config, "detect_os_language", lambda: "cs")
+    monkeypatch.setattr(builtins, "input", lambda _p="": "")  # Enter
+    assert config.get_language() is None
+    onboarding.seed_language()
+    assert config.get_language() == "cs"
+
+
+def test_seed_language_persists_typed_override(isolated_config, monkeypatch):
+    # #114: the user can type a different code, which is persisted instead of the default.
+    monkeypatch.setattr(config, "detect_os_language", lambda: "en")
+    monkeypatch.setattr(builtins, "input", lambda _p="": "ja")
+    onboarding.seed_language()
+    assert config.get_language() == "ja"
+
+
+def test_seed_language_falls_back_to_built_in_when_os_undetectable(isolated_config, monkeypatch):
+    # #114: an undeterminable OS locale → the built-in default is offered and accepted.
+    monkeypatch.setattr(config, "detect_os_language", lambda: None)
+    monkeypatch.setattr(builtins, "input", lambda _p="": "")
+    onboarding.seed_language()
+    assert config.get_language() == config.DEFAULT_LANGUAGE
+
+
+def test_seed_language_does_not_nag_when_already_set(isolated_config, monkeypatch):
+    # #114: a returning user who has a language configured is never prompted.
+    config.set_language("de")
+
+    def must_not_prompt(_p=""):
+        raise AssertionError("must not prompt when a language is already configured")
+
+    monkeypatch.setattr(builtins, "input", must_not_prompt)
+    onboarding.seed_language()
+    assert config.get_language() == "de"  # unchanged
+
+
+def test_seed_language_is_eof_safe_keeps_default(isolated_config, monkeypatch):
+    # #114: a non-interactive run (EOF) keeps the offered default — fail-safe, no crash.
+    monkeypatch.setattr(config, "detect_os_language", lambda: "cs")
+
+    def eof(_p=""):
+        raise EOFError
+
+    monkeypatch.setattr(builtins, "input", eof)
+    onboarding.seed_language()
+    assert config.get_language() == "cs"
+
+
 # --- normalise_feedback_repo: forgiving URL → owner/name (issue #47) ----------------
 
 
@@ -345,19 +397,22 @@ def test_shortcut_offer_declines_on_no(monkeypatch):
 
 
 def test_onboard_full_optin_flow_stores_everything(isolated_config, monkeypatch, capsys):
-    # Key prompt, then token/name (token-only feedback, #53), then 'y' to the
-    # shortcut offer. The feedback repo is the built-in default.
+    # Key prompt, then the language seed (#114, Enter accepts the OS default), then
+    # token/name (token-only feedback, #53), then 'y' to the shortcut offer. The
+    # feedback repo is the built-in default.
     _stub_listing(monkeypatch, available=True)
+    monkeypatch.setattr(config, "detect_os_language", lambda: "cs")
     monkeypatch.setattr(
         builtins,
         "input",
-        _scripted_input(["sk-ant-onboard", "ghp_tok", "Grace", "y"]),
+        _scripted_input(["sk-ant-onboard", "", "ghp_tok", "Grace", "y"]),
     )
     monkeypatch.setattr(winlaunch, "create_make_notes_shortcut", lambda: True)
     monkeypatch.setattr(winlaunch, "create_feedback_shortcut", lambda: True)
     onboarding.onboard()
     out = capsys.readouterr().out
     assert config.get_api_key() == "sk-ant-onboard"
+    assert config.get_language() == "cs"  # seeded from the OS default
     assert config.get_feedback_repo() == config.DEFAULT_FEEDBACK_REPO
     assert config.get_feedback_token() == "ghp_tok"
     assert config.get_reporter_name() == "Grace"
@@ -365,8 +420,10 @@ def test_onboard_full_optin_flow_stores_everything(isolated_config, monkeypatch,
 
 
 def test_onboard_key_then_skip_feedback(isolated_config, monkeypatch, capsys):
-    # Key set, but the user skips feedback (empty token): no shortcut offer reached.
-    monkeypatch.setattr(builtins, "input", _scripted_input(["sk-ant-onboard", ""]))
+    # Key set, language seeded (Enter accepts the default), but the user skips
+    # feedback (empty token): no shortcut offer reached.
+    monkeypatch.setattr(config, "detect_os_language", lambda: "en")
+    monkeypatch.setattr(builtins, "input", _scripted_input(["sk-ant-onboard", "", ""]))
 
     def must_not_create():
         raise AssertionError("shortcut offer must not run when feedback was skipped")

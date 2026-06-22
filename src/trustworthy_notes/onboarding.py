@@ -129,6 +129,35 @@ def setup_feedback() -> bool:
     return True
 
 
+def seed_language() -> None:
+    """First-run only: seed the preferred reading language from the OS locale.
+
+    This is the *one* place the OS locale is read (ADR-008): resolution everywhere
+    else is the cheap flag > config > built-in chain in :func:`config.resolve_language`,
+    which never touches platform I/O. Here, at bootstrap, we offer the OS-detected
+    language (falling back to :data:`config.DEFAULT_LANGUAGE` when it can't be
+    determined) as a one-tap default the user confirms or overrides, and persist it.
+
+    Seeds only when nothing is configured yet — a returning user who has set a
+    language is never nagged. Fully fail-safe: EOF/interrupt (and a bare Enter)
+    keep the offered default, so a non-interactive run is a clean no-op that simply
+    persists the detected/built-in value.
+    """
+    if config.get_language():
+        return
+    default = config.detect_os_language() or config.DEFAULT_LANGUAGE
+    try:
+        answer = input(
+            f"\nRead your notes in [{default}]? Press Enter to accept, "
+            "or type a language code (e.g. cs, ja): "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    chosen = answer or default
+    config.set_language(chosen)
+    print(f"Reading language set to {chosen}. (Change it any time with `tnotes config set-language`.)")
+
+
 def _prompt_repo(repo_default: Optional[str]) -> str:
     """Prompt for the feedback repo as ``owner/name``, normalising a pasted URL.
 
@@ -218,10 +247,11 @@ def offer_desktop_shortcuts() -> None:
 def onboard() -> None:
     """The friendly first-screen for a bare double-click (no PDF given).
 
-    Shows what tnotes is, makes sure a key is set (prompting on first run), offers
-    the optional feedback setup and the desktop shortcuts, then tells the user the
-    one thing they need to do next — drag a PDF onto the icon. Always ends paused
-    (via the caller) so the window stays readable.
+    Shows what tnotes is, makes sure a key is set (prompting on first run), seeds the
+    preferred reading language from the OS locale (first run only), offers the optional
+    feedback setup and the desktop shortcuts, then tells the user the one thing they
+    need to do next — drag a PDF onto the icon. Always ends paused (via the caller) so
+    the window stays readable.
 
     Deliberately *not* the raw ``--help`` dump: that lists a dozen power-user
     subcommands and Typer option syntax, which is noise to someone who just
@@ -234,6 +264,7 @@ def onboard() -> None:
     print("tnotes — turn a PDF into trustworthy, source-anchored notes.\n")
     if not ensure_api_key():
         return
+    seed_language()
     if setup_feedback():
         offer_desktop_shortcuts()
     print(

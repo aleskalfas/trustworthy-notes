@@ -221,6 +221,40 @@ def test_cite_toggles_citation_content(tmp_path, stub_pipeline):
     assert "[s-1](#note-s-1)" in cited_md   # anchored copy keeps the markers
 
 
+def test_language_flag_resolves_and_threads_to_export(tmp_path, stub_pipeline, monkeypatch):
+    # #114: an explicit language is resolved on the flag>config>built-in chain and
+    # carried to the reading/export stage (where #112 will consume it). We capture
+    # the language _export receives by wrapping it.
+    seen = {}
+    real_export = pipeline._export
+
+    def capturing_export(*args, language=None, **kw):
+        seen["language"] = language
+        return real_export(*args, language=language, **kw)
+
+    monkeypatch.setattr(pipeline, "_export", capturing_export)
+    src = _src(tmp_path)
+    pipeline.run(src, language="cs", parse_pages=_parse_pages)
+    assert seen["language"] == "cs"  # explicit flag wins
+
+
+def test_language_absent_resolves_via_config_default(tmp_path, stub_pipeline, monkeypatch):
+    # #114: with no flag, the resolver falls through to the configured value (here
+    # stubbed to "ja"); resolution lives in pipeline.run, not the CLI edge.
+    monkeypatch.setattr(pipeline.config, "resolve_language", lambda flag: flag or "ja")
+    seen = {}
+    real_export = pipeline._export
+
+    def capturing_export(*args, language=None, **kw):
+        seen["language"] = language
+        return real_export(*args, language=language, **kw)
+
+    monkeypatch.setattr(pipeline, "_export", capturing_export)
+    src = _src(tmp_path)
+    pipeline.run(src, parse_pages=_parse_pages)  # no language flag
+    assert seen["language"] == "ja"  # config/default resolved inside pipeline.run
+
+
 def test_single_section_document_still_yields_a_book(tmp_path, stub_pipeline):
     # The stub assemble emits exactly one section; with prose_only off (the --all
     # behaviour) it must still export and produce a book — no "0 chapters" dead-end.

@@ -48,6 +48,26 @@ def test_config_show_built_in_defaults_when_unset(cli):
     assert "built-in" in res.stdout
 
 
+def test_config_set_language_round_trips(cli):
+    # #114: set-language persists and echoes; show then reports it from config.
+    res = runner.invoke(cli.app, ["config", "set-language", "cs"])
+    assert res.exit_code == 0
+    assert "cs" in res.stdout
+    assert cli.config.get_language() == "cs"
+
+    res = runner.invoke(cli.app, ["config", "show"])
+    assert res.exit_code == 0
+    assert "language: cs" in res.stdout
+    assert "from config" in res.stdout
+
+
+def test_config_show_built_in_language_when_unset(cli):
+    # #114: with no configured language, show reports the built-in default (en).
+    res = runner.invoke(cli.app, ["config", "show"])
+    assert res.exit_code == 0
+    assert f"language: {cli.config.DEFAULT_LANGUAGE}" in res.stdout
+
+
 def test_config_set_no_update_check_round_trips(cli):
     assert cli.config.get_no_update_check() is False  # default: nudge on
     res = runner.invoke(cli.app, ["config", "set-no-update-check", "true"])

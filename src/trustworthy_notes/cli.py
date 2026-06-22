@@ -224,6 +224,12 @@ def run(
         help="Raise the per-page extraction token budget (default 32000). Use when high "
         "effort exhausts the budget while thinking and pages fail.",
     ),
+    language: str = typer.Option(
+        None, "--language",
+        help="Preferred reading language as a short code (e.g. en, cs, ja). Resolves: "
+        "this flag > config > built-in (en). The reading/export layer uses it to offer "
+        "translation when a page's language differs (ADR-008).",
+    ),
 ):
     """One-command book generation: run the whole pipeline on a bare PDF.
 
@@ -280,7 +286,8 @@ def run(
     try:
         book_pdf = pipeline.run(
             pdf, pages=pages, force=force, cite=cite, keep_md=md,
-            model=model, effort=effort, max_tokens=max_tokens, log=log, parse_pages=_parse_pages
+            model=model, effort=effort, max_tokens=max_tokens, language=language,
+            log=log, parse_pages=_parse_pages
         )
     except ValueError as exc:
         typer.echo(f"tnotes: {exc}", err=True)
@@ -363,7 +370,7 @@ def auth_clear_key():
     typer.echo("Cleared the saved key.")
 
 
-config_app = typer.Typer(help="Set tnotes's defaults (extraction model and effort), stored in your home.")
+config_app = typer.Typer(help="Set tnotes's defaults (extraction model, effort, reading language), stored in your home.")
 app.add_typer(config_app, name="config")
 
 
@@ -384,6 +391,21 @@ def config_set_effort(
     config.set_effort(effort)
     shown = effort or "'' (none)"
     typer.echo(f"Saved default effort: {shown} ({config.config_file()}).")
+
+
+@config_app.command("set-language")
+def config_set_language(
+    language: str = typer.Argument(
+        ..., help="Preferred reading language as a short code, e.g. en | cs | ja."
+    )
+):
+    """Save the default preferred reading language (used when no --language flag is given).
+
+    Resolves at use as: flag > this config value > built-in (en). The reading/export
+    layer uses it to offer translation when a page's language differs (ADR-008).
+    """
+    config.set_language(language)
+    typer.echo(f"Saved preferred language: {language} ({config.config_file()}).")
 
 
 @config_app.command("set-no-update-check")
@@ -458,7 +480,7 @@ def config_set_eval_corpus_dir(
 
 @config_app.command("show")
 def config_show():
-    """Show the resolved default model and effort, and where each comes from."""
+    """Show the resolved default model, effort, and language, and where each comes from."""
     saved_model = config.get_model()
     saved_effort = config.get_effort()
     model = saved_model or config.DEFAULT_MODEL
@@ -469,6 +491,10 @@ def config_show():
     typer.echo(f"config file : {config.config_file()}")
     typer.echo(f"model : {model}  (from {model_src})")
     typer.echo(f"effort: {effort_shown}  (from {effort_src})")
+    saved_language = config.get_language()
+    language = saved_language or config.DEFAULT_LANGUAGE
+    language_src = "config" if saved_language else f"built-in ({config.DEFAULT_LANGUAGE})"
+    typer.echo(f"language: {language}  (from {language_src})")
     repo = config.get_feedback_repo()
     typer.echo(f"feedback repo : {repo or 'not set'}")
     typer.echo(f"feedback token: {'set' if config.get_feedback_token() else 'not set (falls back to local file)'}")
