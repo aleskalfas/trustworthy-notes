@@ -14,6 +14,9 @@
     "source": {
       "$ref": "#/$defs/source"
     },
+    "generation": {
+      "$ref": "#/$defs/generation"
+    },
     "terms": {
       "type": "array",
       "items": {"$ref": "#/$defs/term"},
@@ -116,6 +119,25 @@
           "then": {"required": ["page_range"]}
         }
       ]
+    },
+    "generation": {
+      "type": "object",
+      "description": "The extractor settings that PRODUCED these notes — the generation provenance (ADR-007, issue #98). Distinct from the eval instrument fingerprint (how a score was measured); this records how the notes being scored were made. Optional and additive: notes generated before this field read as 'unknown' generation, never a contradiction (no schema_version bump — per-page notes are regenerable application output, not adopter state). 'eval' rolls these per-page settings up to a per-doc label and flags a doc whose pages disagree as mixed/contaminated.",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "The model id that extracted the page (e.g. the Sonnet model string)."
+        },
+        "effort": {
+          "type": "string",
+          "description": "The thinking effort the extractor ran at (e.g. 'low', 'medium', 'high')."
+        },
+        "max_tokens": {
+          "type": "integer",
+          "description": "The max-tokens budget the extraction ran under."
+        }
+      }
     },
     "term": {
       "type": "object",
