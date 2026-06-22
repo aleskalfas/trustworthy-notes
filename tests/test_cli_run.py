@@ -41,9 +41,9 @@ def test_bare_pdf_routes_to_orchestrator(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_run(pdf, *, pages, force, cite, keep_md, model, effort, max_tokens, log, parse_pages):
+    def fake_run(pdf, *, pages, force, cite, keep_md, model, effort, max_tokens, language, log, parse_pages):
         seen.update(pdf=Path(pdf), pages=pages, force=force, cite=cite, keep_md=keep_md,
-                    model=model, effort=effort, max_tokens=max_tokens)
+                    model=model, effort=effort, max_tokens=max_tokens, language=language)
         return pdf.parent / "Foo.tnotes.pdf"
 
     monkeypatch.setattr("trustworthy_notes.pipeline.run", fake_run)
@@ -52,9 +52,10 @@ def test_bare_pdf_routes_to_orchestrator(tmp_path, monkeypatch):
     res = runner.invoke(cli.app, [str(src)])
     assert res.exit_code == 0, res.stdout
     assert seen["pdf"] == src
-    # model/effort/max_tokens default to None → pipeline.run falls back to config/default.
+    # model/effort/max_tokens/language default to None → pipeline.run falls back to config/default.
     assert seen == {"pdf": src, "pages": None, "force": False, "cite": False,
-                    "keep_md": False, "model": None, "effort": None, "max_tokens": None}
+                    "keep_md": False, "model": None, "effort": None, "max_tokens": None,
+                    "language": None}
     assert "Foo.tnotes.pdf" in res.stdout
 
 
@@ -64,9 +65,9 @@ def test_bare_pdf_threads_pages_force_cite(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_run(pdf, *, pages, force, cite, keep_md, model, effort, max_tokens, log, parse_pages):
+    def fake_run(pdf, *, pages, force, cite, keep_md, model, effort, max_tokens, language, log, parse_pages):
         seen.update(pages=pages, force=force, cite=cite, keep_md=keep_md,
-                    model=model, effort=effort, max_tokens=max_tokens)
+                    model=model, effort=effort, max_tokens=max_tokens, language=language)
         return pdf.parent / "out.pdf"
 
     monkeypatch.setattr("trustworthy_notes.pipeline.run", fake_run)
@@ -74,10 +75,11 @@ def test_bare_pdf_threads_pages_force_cite(tmp_path, monkeypatch):
 
     res = runner.invoke(cli.app, [str(src), "-p", "1-30", "--force", "--cite", "--md",
                                   "--model", "claude-opus-4-6", "--effort", "high",
-                                  "--max-tokens", "64000"])
+                                  "--max-tokens", "64000", "--language", "cs"])
     assert res.exit_code == 0, res.stdout
     assert seen == {"pages": "1-30", "force": True, "cite": True, "keep_md": True,
-                    "model": "claude-opus-4-6", "effort": "high", "max_tokens": 64000}
+                    "model": "claude-opus-4-6", "effort": "high", "max_tokens": 64000,
+                    "language": "cs"}
 
 
 def test_bare_pdf_requires_auth(tmp_path, monkeypatch):

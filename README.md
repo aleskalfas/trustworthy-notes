@@ -260,6 +260,7 @@ tnotes INPUT.pdf --md            # also keep the Markdown (INPUT.tnotes.md) besi
 tnotes INPUT.pdf --force         # regenerate every stage (default: skip finished ones)
 tnotes INPUT.pdf --model M --effort high   # override extraction settings (tuning; see docs/EVAL.md)
 tnotes INPUT.pdf --effort high --max-tokens 64000   # raise the budget if dense pages fail at high effort
+tnotes INPUT.pdf --language cs             # set your preferred reading language for this run (see below)
 ```
 
 Already-finished stages are skipped, so a re-run resumes where it left off (use
@@ -309,6 +310,34 @@ tnotes extract INPUT.pdf --pages 14 -m claude-haiku-4-5 -e ''   # a flag overrid
 
 These defaults are stored in the same `~/.trustworthy-notes/config.yaml` as your
 API key (see Platform below); setting them never touches the saved key.
+
+### Choosing your reading language
+
+`tnotes` tracks a **preferred reading language** — the language you'd like to study
+your notes in. It is the basis for an upcoming reading-layer feature that offers to
+translate the synthesized study prose when a document is in another language, while
+always leaving the verbatim source quotes untouched (the provenance guarantee; see
+`docs/architecture/decisions/ADR-008-translation-trust-boundary.md`).
+
+The preferred language resolves in layers, most specific first:
+
+1. an explicit `--language` flag on the run (`tnotes INPUT.pdf --language cs`),
+2. else a default you saved with `tnotes config set-language`,
+3. else the built-in default `en`.
+
+```
+tnotes config set-language cs   # set your default reading language (a short code: en, cs, ja, …)
+tnotes config show              # show the resolved language and where it comes from
+tnotes INPUT.pdf --language ja  # override it for a single run
+```
+
+On first run, the bootstrap flow (the friendly screen a Windows double-click shows)
+offers your operating system's language as a one-tap default — press Enter to accept,
+or type a different code. That seed happens once; a returning user is never re-asked.
+
+> Note: this release wires the preferred language through end to end; the actual
+> translation offer is a follow-up. Setting it now does no harm and means it's ready
+> when translation lands.
 
 ### Cost estimates
 

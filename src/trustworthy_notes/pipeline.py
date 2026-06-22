@@ -77,6 +77,7 @@ def run(
     model: Optional[str] = None,
     effort: Optional[str] = None,
     max_tokens: Optional[int] = None,
+    language: Optional[str] = None,
     log: Callable[[str], None] = lambda msg: None,
     parse_pages: Callable[[str, int], list[int]],
 ) -> Path:
@@ -85,9 +86,16 @@ def run(
     ``parse_pages`` is the CLI's page-spec parser, injected so the orchestrator
     and the ``extract`` subcommand share one interpretation of ``-p``. ``log``
     receives human-readable progress lines (the CLI routes them to stderr).
+
+    ``language`` is the reader's preferred language, resolved here on the same
+    flag > config > built-in chain as ``model``/``effort`` (ADR-008; the OS-locale
+    link is the bootstrap seed only, never read on this hot path). It is carried to
+    the reading/export stage, which is where translation will consume it (#112);
+    until then ``_export`` simply receives and ignores it.
     """
     model = config.resolve_model(model)
     effort = config.resolve_effort(effort)
+    language = config.resolve_language(language)
     api_key = config.get_api_key()
     work = workspace.work_dir(input_path)
 
@@ -100,7 +108,7 @@ def run(
     _build_dedup(input_path, work, force, model, effort, api_key, log)
     _build_relations(input_path, work, force, model, effort, api_key, log)
     _assemble(input_path, work, force, log)
-    _export(input_path, work, force, style, model, effort, api_key, log)
+    _export(input_path, work, force, style, model, effort, api_key, log, language=language)
     return _book(input_path, work, pages, cite, style, log, keep_md=keep_md)
 
 
@@ -219,9 +227,14 @@ def _assemble(input_path, work, force, log) -> None:
     log(f"  {len(summaries)} chapter notes-set(s)")
 
 
-def _export(input_path, work, force, style, model, effort, api_key, log) -> None:
+def _export(input_path, work, force, style, model, effort, api_key, log, *, language=None) -> None:
     """Wave 4: per-chapter study documents. ``prose_only`` is off (the ``--all``
-    behaviour) so a single-section document still exports."""
+    behaviour) so a single-section document still exports.
+
+    ``language`` is the resolved preferred reading language, threaded here because
+    the reading/export layer is where translation lives (ADR-008). It is accepted
+    now and not yet consumed — the confirm-then-translate offer is task #112; this
+    keeps the seam in place so wiring it up there is a one-spot change."""
     import anthropic
 
     src_dir = workspace.compose_stage_dir(work, "chapters")
