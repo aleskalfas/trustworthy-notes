@@ -176,6 +176,10 @@
           "minLength": 1,
           "description": "Verbatim text copied from the source stream. Required for kind=text."
         },
+        "excerpt_translation": {
+          "type": "string",
+          "description": "A reading-aid translation of `excerpt`; NOT evidence, never anchor-checked. Produced at the reading/export layer only for cited excerpts when the resolved reader language differs from the source (ADR-008), rendered beneath the original quote and never replacing it. Optional and additive: absent on notes made before it and on every non-translated run (no schema_version bump — per-page notes are regenerable application output, not adopter state). The §7 anchor checks read `excerpt` ONLY and never this field."
+        },
         "source": {
           "type": "string",
           "enum": ["body", "footnote"],

@@ -98,6 +98,29 @@ def test_assemble_chapter_maps_cross_page_relation():
     assert cset["relations"] == [{"from": "s-1", "to": "s-2", "type": "supports"}]  # keys mapped to final ids
 
 
+def test_assemble_chapter_carries_excerpt_translation_gloss():
+    # #116 / ADR-008: the reading-aid gloss is an additive optional evidence field, carried
+    # verbatim through _assemble_chapter's field-by-field rebuild like caption/locator/script.
+    from trustworthy_notes.compose import _assemble_chapter
+    from trustworthy_notes.validation import validate_structure
+
+    ch = {"key": "C", "title": "C", "page_indices": [1], "page_numbers": [2]}
+    notes = {
+        1: {
+            "evidence": [{"id": "e-1", "excerpt": "kings had wives", "source": "body",
+                          "excerpt_translation": "králové měli manželky", "caption": "cap"}],
+            "statements": [{"id": "s-1", "type": "claim", "text": "a", "evidence": ["e-1"]}],
+            "relations": [],
+        },
+    }
+    cset = _assemble_chapter(ch, notes, merges=[], xrels=[], links={}, term_label={}, document="D")
+    assert validate_structure(cset) == []                                  # additive field still valid
+    ev = cset["evidence"][0]
+    assert ev["excerpt"] == "kings had wives"                              # original quote intact
+    assert ev["excerpt_translation"] == "králové měli manželky"           # gloss survived compose
+    assert ev["caption"] == "cap"                                         # sibling opt-carry still works
+
+
 def test_dedup_does_not_cluster_across_types(tmp_path):
     shared = "the same long verbatim excerpt cited by two differently typed notes here"
     _write_pages(

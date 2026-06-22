@@ -321,6 +321,16 @@ language — that is the provenance guarantee, and translating the reading prose
 weakens it (the quotes are still the source's own words; see
 `docs/architecture/decisions/ADR-008-translation-trust-boundary.md`).
 
+When you read in a language other than the source's, the cited copy also shows a small
+*translation:* line **beneath each source quote** in *Notes & Sources* — a reading aid
+so you can follow what the quote says without losing sight of the original. The
+translation sits *next to* the verbatim quote, never in place of it: the quote above it
+is still the source's own words and is the only thing the anchor checks ever read. The
+gloss is produced only for the quotes a study document actually cites (not every
+extracted excerpt), and only when you're reading in a non-source language — an
+English/native run shows no translation line. The clean prose reading copy carries no
+excerpts at all, so it shows no glosses either.
+
 The preferred language resolves in layers, most specific first:
 
 1. an explicit `--language` flag on the run (`tnotes INPUT.pdf --language cs`),

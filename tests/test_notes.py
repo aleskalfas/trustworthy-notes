@@ -78,6 +78,43 @@ def test_evidence_script_field_accepted():
     assert not validate_structure(doc), "the optional evidence `script` field should validate"
 
 
+def test_evidence_excerpt_translation_is_additive():
+    # #116 / ADR-008: the gloss is optional and additive — notes WITH and WITHOUT it
+    # both validate (no schema_version bump, no migration).
+    without = _minimal(document="d", page_index=1)
+    assert not validate_structure(without), "a note without the gloss must validate"
+    with_gloss = _minimal(document="d", page_index=1)
+    with_gloss["evidence"][0]["excerpt_translation"] = "y (in another language)"
+    assert not validate_structure(with_gloss), "the optional excerpt_translation must validate"
+
+
+def test_traceability_ignores_excerpt_translation():
+    # HARD INVARIANT (ADR-008): §7.2 anchors on `excerpt` ONLY. A bogus gloss must not
+    # flip the verdict either way — the original excerpt is the sole thing checked.
+    from types import SimpleNamespace
+
+    from trustworthy_notes.validation import check_traceability
+
+    page = SimpleNamespace(page_index=0, text="alpha beta gamma", footnotes="")
+    doc = {
+        "schema_version": 1, "source": {"document": "d", "page_index": 0},
+        "evidence": [
+            # real excerpt + a gloss that is NOT on the page → still traceable.
+            {"id": "e-ok", "excerpt": "alpha beta", "source": "body",
+             "excerpt_translation": "nowhere on the page"},
+            # bogus excerpt + a gloss that IS on the page → still flagged (gloss isn't evidence).
+            {"id": "e-bad", "excerpt": "missing words", "source": "body",
+             "excerpt_translation": "alpha beta gamma"},
+        ],
+        "statements": [
+            {"id": "s-1", "type": "claim", "text": "x", "evidence": ["e-ok", "e-bad"]},
+        ],
+    }
+    problems = check_traceability(doc, [page])
+    assert any("e-bad" in p for p in problems), problems        # absent excerpt still caught
+    assert not any("e-ok" in p for p in problems), problems     # valid excerpt unaffected by its gloss
+
+
 def test_referential_integrity_catches_dangling_evidence():
     doc = _minimal(document="d", page_index=1)
     doc["statements"][0]["evidence"] = ["e-missing"]

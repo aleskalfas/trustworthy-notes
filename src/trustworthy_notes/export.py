@@ -13,6 +13,7 @@ same grounded digest.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Callable, Optional
 
@@ -62,6 +63,83 @@ def _warn_if_unusual(language: str, warn: Optional[Callable[[str], None]]) -> No
     only. ADR-008 keeps NO allowlist, so any well-formed value passes silently."""
     if warn and not _PLAUSIBLE_LANGUAGE.match(language.strip()):
         warn(f"language {language!r} looks unusual; passing it through to synthesis anyway")
+
+# The gloss is a reading aid, NOT evidence (ADR-008). This system prompt is for the
+# small, separate translation pass over the *cited* excerpts only — it never re-reads
+# the source page and never touches the stored `excerpt`, only emits a translation
+# beside it. Kept tight (low effort) because the gloss is help, not the anchor.
+_GLOSS_SYSTEM = (
+    "You translate short verbatim source quotations into a target language as a READING "
+    "AID. You are NOT extracting or judging evidence — you only render each quote's "
+    "meaning in the target language. Translate faithfully and literally; do not add, omit, "
+    "explain, or interpret. Return ONLY a JSON object mapping each given id to its "
+    "translation string, nothing else."
+)
+
+
+def _translate_excerpts(
+    excerpts: dict[str, str], language: str, *,
+    client: "anthropic.Anthropic", model: str, effort: str = "low", max_tokens: int = 2000,
+) -> dict[str, str]:
+    """Translate cited source excerpts into ``language`` for the reading-aid gloss.
+
+    ``excerpts`` maps evidence-id -> verbatim ``excerpt`` for the CITED evidence only
+    (cost-bounded: a study document surfaces a small subset of all extracted evidence,
+    and ADR-008 produces the gloss for those alone). Returns evidence-id -> translation
+    for the ids the model returned; ids it omits or returns blank are simply skipped
+    (the appendix then renders the original quote with no gloss line — never an error).
+
+    This is a SEPARATE pass over the original quotes; it never mutates ``excerpt`` and
+    its output never enters a §7 check. The model seam is the same injectable
+    ``client``/``model`` the synthesis uses, so it is testable without a network call.
+    """
+    if not excerpts:
+        return {}
+    payload = json.dumps(excerpts, ensure_ascii=False)
+    instruction = (
+        f"Translate each quotation below into {language}. Keep the SAME json keys (the "
+        f"ids); the value of each is the {language} translation of that quotation. "
+        f"Return ONLY the json object.\n\nQUOTES (json id -> source text):\n{payload}"
+    )
+    output_config: dict = {}
+    if effort:
+        output_config["effort"] = effort
+    with client.messages.stream(
+        model=model, max_tokens=max_tokens, thinking={"type": "adaptive"},
+        system=[{"type": "text", "text": _GLOSS_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": instruction}],
+        **({"output_config": output_config} if output_config else {}),
+    ) as stream:
+        response = stream.get_final_message()
+    body = next((b.text for b in response.content if b.type == "text"), None)
+    if not body:
+        return {}
+    parsed = _parse_gloss_json(body)
+    # Keep only ids we asked about, with a non-blank translation that actually differs
+    # from the original (a model echoing the source text back adds no reading value).
+    return {
+        eid: t.strip()
+        for eid, t in parsed.items()
+        if eid in excerpts and isinstance(t, str) and t.strip() and t.strip() != excerpts[eid].strip()
+    }
+
+
+# The gloss pass is asked for raw JSON, but a model may wrap it in a ```json fence or
+# add a sentence; pull the first {...} object out before parsing. A parse failure is
+# non-fatal — the gloss is advisory, so we return {} and render the originals alone.
+_JSON_OBJECT = re.compile(r"\{.*\}", re.S)
+
+
+def _parse_gloss_json(body: str) -> dict:
+    m = _JSON_OBJECT.search(body)
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group(0))
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
 
 _STYLES = {
     "outline": (
@@ -148,11 +226,20 @@ def strip_citations(md: str) -> str:
     return md.rstrip() + "\n"
 
 
-def _notes_appendix(cset: dict, cited: set[str]) -> str:
+def _notes_appendix(cset: dict, cited: set[str], gloss: Optional[dict[str, str]] = None) -> str:
     """Anchored 'Notes & Sources' entries for each cited note: the note text plus its
     verbatim evidence and printed-page citation — the click-through target for every
     ``[s-N]``. The page is a plain-text citation (a clickable jump into the *separate*
-    source PDF isn't portable across viewers); the verbatim quote is right here."""
+    source PDF isn't portable across viewers); the verbatim quote is right here.
+
+    ``gloss`` (evidence-id -> reading-aid translation) is rendered as a visually
+    distinct line BENEATH the original quote, never replacing it (ADR-008). It prefers
+    an in-record ``excerpt_translation`` (carried through compose) and falls back to a
+    freshly-produced map; absent for an evidence id, only the original quote shows. The
+    quote itself is always the source's verbatim words — the gloss is help, not the
+    anchor, and is shown only in this cited copy (the clean reading copy strips the
+    whole appendix, so it never appears there)."""
+    gloss = gloss or {}
     ev = {e["id"]: e for e in cset.get("evidence", [])}
     out = ["", "---", "## Notes & Sources", "",
            "Every citation links here; each note shows its verbatim source evidence and printed page."]
@@ -170,6 +257,12 @@ def _notes_appendix(cset: dict, cited: set[str]) -> str:
             q = e.get("excerpt", "")
             q = q if len(q) <= 240 else q[:237] + "…"
             out.append(f"> {q}  \n> — p.{page}{loc} ({e.get('source', 'body')})")
+            tr = gloss.get(eid) or e.get("excerpt_translation")
+            if tr:
+                tr = tr if len(tr) <= 240 else tr[:237] + "…"
+                # reading aid, BENEATH the quote, visually distinct (italic) and labelled —
+                # never a replacement for the verbatim evidence above (ADR-008).
+                out.append(f"> _translation: {tr}_")
     return "\n".join(out)
 
 
@@ -191,7 +284,13 @@ def study_document(
     while still drawing ONLY on the provided notes and citing the real ``[s-N]`` ids
     verbatim. This is the safe reader-layer translation seam: extraction stays native
     and the anchored excerpts are never touched (ADR-008). ``warn`` (optional) is a
-    sink for a soft, non-blocking warning when a target value looks malformed."""
+    sink for a soft, non-blocking warning when a target value looks malformed.
+
+    When translating, a SEPARATE small pass also produces a reading-aid gloss for the
+    CITED excerpts only (cost-bounded — never every extracted quote), rendered beneath
+    each original quote in the Notes & Sources appendix. The verbatim ``excerpt`` is
+    left untouched and stays the sole anchored evidence; the gloss never enters a §7
+    check. On the English/None path no gloss is produced."""
     if style not in _STYLES:
         raise ValueError(f"unknown style {style!r}; have {sorted(_STYLES)}")
     # The English/None path adds nothing to the prompt (strict no-op, no regression);
@@ -220,6 +319,23 @@ def study_document(
     cited = found & ids
     unknown = sorted(found - ids)            # cited but not a real note → faithfulness flag
 
+    # Reading-aid gloss (ADR-008): only when translating, and ONLY over the excerpts the
+    # cited notes actually surface — a small subset of all extracted evidence (cost bound).
+    # The original `excerpt` is never touched; the gloss renders beneath it and is never
+    # anchor-checked. The English/None path produces nothing (`gloss` stays empty).
+    gloss: dict[str, str] = {}
+    if not _is_default_language(language):
+        ev_by_id = {e["id"]: e for e in cset.get("evidence", [])}
+        cited_excerpts = {
+            eid: ev_by_id[eid].get("excerpt", "")
+            for s in cset.get("statements", []) if s["id"] in cited
+            for eid in s.get("evidence", [])
+            if eid in ev_by_id and ev_by_id[eid].get("excerpt")
+        }
+        gloss = _translate_excerpts(
+            cited_excerpts, language, client=client, model=model, effort=effort
+        )
+
     # drop a model-supplied H1 title; we render our own + meta + TOC
     lines = body.splitlines()
     if lines and lines[0].startswith("# "):
@@ -237,7 +353,7 @@ def study_document(
         f"*{src.get('document', '')} · PDF pages {rng[0]}–{rng[1]}*\n",
         "## Contents", "", toc, "",
         numbered,
-        _notes_appendix(cset, cited),
+        _notes_appendix(cset, cited, gloss),
     ]
     if unknown:
         doc.append(f"\n> ⚠ {len(unknown)} citation(s) reference notes not in this chapter "
