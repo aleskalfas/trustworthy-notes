@@ -74,7 +74,16 @@ tnotes ./doc.pdf --model claude-opus-4-6 --effort high --force
 ```
 
 `--force` is essential — it regenerates the notes (otherwise finished stages are
-reused and the setting change has no effect). The procedure:
+reused and the setting change has no effect).
+
+> **Watch for page failures at high effort.** On dense pages, high effort can make
+> the model think past the per-page token budget (default 32000) and emit no JSON —
+> those pages produce no notes (and keep any stale notes from a prior run). The
+> completeness check surfaces this as `MISSING [...]`; the fix is to raise the
+> budget with `--max-tokens 64000`. A run with MISSING pages is **not** a valid
+> comparison point, even if the pages that *did* extract score 100%.
+
+The procedure:
 
 1. Pick a small fixed set of documents you know well (your private corpus).
 2. For each setting, regenerate the notes with the flags above, then run

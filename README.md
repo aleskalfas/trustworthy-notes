@@ -256,6 +256,7 @@ tnotes INPUT.pdf --cite          # the anchored copy: [s-N] markers + Notes & So
 tnotes INPUT.pdf --md            # also keep the Markdown (INPUT.tnotes.md) beside the PDF
 tnotes INPUT.pdf --force         # regenerate every stage (default: skip finished ones)
 tnotes INPUT.pdf --model M --effort high   # override extraction settings (tuning; see docs/EVAL.md)
+tnotes INPUT.pdf --effort high --max-tokens 64000   # raise the budget if dense pages fail at high effort
 ```
 
 Already-finished stages are skipped, so a re-run resumes where it left off (use
