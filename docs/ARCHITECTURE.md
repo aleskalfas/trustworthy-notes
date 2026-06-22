@@ -299,7 +299,12 @@ links statements to it by label match.
   & self-upgrade trust model), ADR-002 (frozen-build correctness), ADR-003
   (feedback data-exfiltration boundary), ADR-004 (cost estimate is
   non-authoritative) own the rationale for the v0.2.0 packaging and
-  out-of-pipeline surfaces (§2) and the network-posture invariant (§4).
+  out-of-pipeline surfaces (§2) and the network-posture invariant (§4). ADR-006
+  (page identity & locator resolution) and ADR-007 (faithfulness score is an
+  instrument) pin the pipeline-internal page-identity and maintainer-eval
+  decisions. ADR-008 (translation trust boundary) pins where translation may sit
+  relative to anchoring — reading/export layer only, never extraction, and never
+  in the anchored excerpt.
 - `.pkit/scratchpad/active/2026-06-14-context-strategy.md` — per-page context
   strategy + the page-vs-accretion decision.
 - `.pkit/scratchpad/active/2026-06-13-evidence-summarizer-design.md` — earlier
