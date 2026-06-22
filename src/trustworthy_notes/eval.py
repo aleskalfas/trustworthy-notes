@@ -68,6 +68,14 @@ SOURCE_PAGES_FILE = "source-pages.yaml"
 # part of what makes two runs comparable (ADR-007's fingerprint discipline).
 SCORE_SCHEMA_VERSION = 1
 
+# Generation-provenance markers (ADR-007, issue #98). A doc/corpus reads as:
+#   - "unknown" when no page recorded its generation settings (pre-#98 notes), OR
+#   - "mixed"   when present pages disagree, or known pages mix with unknown ones —
+#               a `--force` re-run artifact, NOT a clean low-vs-high data point.
+# Only a uniform, fully-recorded setting yields a concrete generation label.
+GENERATION_UNKNOWN = "unknown"
+GENERATION_MIXED = "mixed"
+
 
 @dataclass(frozen=True)
 class FloorCounts:
@@ -137,6 +145,64 @@ def _rate(numerator: int, denominator: int) -> float:
     return 1.0 if denominator == 0 else numerator / denominator
 
 
+def _generation_key(generation: object) -> Optional[tuple]:
+    """A hashable, order-stable key for one page's generation block, or None if absent.
+
+    Reduces ``{model, effort, max_tokens}`` to a tuple so distinct settings can be set-
+    compared and deduplicated. A page with no ``generation`` block (or a non-mapping one)
+    returns None — the "unknown" contributor, which a roll-up treats distinctly from any
+    concrete setting."""
+    if not isinstance(generation, dict):
+        return None
+    return (
+        generation.get("model"),
+        generation.get("effort"),
+        generation.get("max_tokens"),
+    )
+
+
+def _generation_dict(key: tuple) -> dict:
+    """Re-expand a generation key tuple into the ``{model, effort, max_tokens}`` shape."""
+    model, effort, max_tokens = key
+    return {"model": model, "effort": effort, "max_tokens": max_tokens}
+
+
+def roll_up_generation(generations: list[object]) -> dict:
+    """Aggregate per-page generation blocks into one per-doc/per-corpus label (ADR-007).
+
+    Rules (issue #98):
+      * all present pages carry the *same* ``{model, effort, max_tokens}`` and none is
+        unknown → that single setting is the label (``mixed: False``);
+      * present pages *disagree*, or a known setting mixes with an unknown page → a
+        ``mixed`` marker plus the set of distinct settings seen (``mixed: True``) — a
+        ``--force`` re-run artifact, never a clean data point;
+      * no page recorded its settings → ``"unknown"`` (``mixed: False`` — uniformly
+        unmeasured is not a contradiction, it is the pre-#98 backward-compat case).
+
+    Returns a stable dict: ``{"setting": <block>|"unknown"|"mixed", "mixed": bool}`` and,
+    when mixed, ``"distinct": [<block>, ...]`` — the distinct settings (unknown pages
+    contribute an ``"unknown"`` entry) so a report can show exactly what got mingled.
+    """
+    keys = [_generation_key(g) for g in generations]
+    has_unknown = any(k is None for k in keys)
+    # Sort by the tuple's string form so a partial block (a None field) never trips the
+    # mixed-type comparison `sorted` would otherwise do on heterogeneous tuples.
+    distinct = sorted({k for k in keys if k is not None}, key=str)
+
+    if not distinct:
+        # No page recorded settings → uniformly unknown (not a contradiction).
+        return {"setting": GENERATION_UNKNOWN, "mixed": False}
+    if len(distinct) == 1 and not has_unknown:
+        return {"setting": _generation_dict(distinct[0]), "mixed": False}
+
+    # Disagreement, or known-mixed-with-unknown → contaminated. List what was mingled,
+    # with unknown pages represented as an explicit "unknown" entry.
+    entries: list = [_generation_dict(k) for k in distinct]
+    if has_unknown:
+        entries.append(GENERATION_UNKNOWN)
+    return {"setting": GENERATION_MIXED, "mixed": True, "distinct": entries}
+
+
 @dataclass(frozen=True)
 class DocFloorScore:
     """One document's floor score: its counts plus the verbatim problem strings.
@@ -150,6 +216,12 @@ class DocFloorScore:
     that actually have a notes file, and ``missing_pages`` is the gap. A non-empty
     ``missing_pages`` means the doc is **incomplete** — a failed/stale-contaminated run
     that must not read as a clean 100%.
+
+    ``generation`` is the per-doc roll-up of the per-page generation provenance (issue
+    #98): one ``{model, effort, max_tokens}`` block when every present page agrees, the
+    ``"mixed"`` marker (with ``generation_mixed`` True) when pages disagree or known and
+    unknown pages mingle, or ``"unknown"`` when no page recorded its settings. A mixed
+    doc is a ``--force`` re-run artifact, not a clean low-vs-high data point.
     """
 
     doc_id: str
@@ -158,6 +230,8 @@ class DocFloorScore:
     expected_pages: list[int] = field(default_factory=list)
     present_pages: list[int] = field(default_factory=list)
     missing_pages: list[int] = field(default_factory=list)
+    generation: object = GENERATION_UNKNOWN
+    generation_mixed: bool = False
 
     @property
     def is_complete(self) -> bool:
@@ -174,6 +248,13 @@ class InstrumentFingerprint:
     the doc list (so a corpus that gained/lost a doc is visibly a different
     instrument), the timestamp, the tool/build version, and the aggregate floor
     counts. No judge fields — the judge is deferred (ADR-007).
+
+    ``generation`` is the corpus-level roll-up of every doc's generation provenance
+    (issue #98): the single ``{model, effort, max_tokens}`` setting when every doc
+    agrees, ``"mixed"`` when they disagree (or known and unknown docs mingle), or
+    ``"unknown"`` when no doc recorded its settings. This completes the fingerprint on
+    the *generation* side — the conditions under which the scored notes were made,
+    alongside the conditions under which the score was measured.
     """
 
     corpus_id: str
@@ -181,6 +262,7 @@ class InstrumentFingerprint:
     generated_at: str
     tool_version: str
     floor_counts: FloorCounts
+    generation: object = GENERATION_UNKNOWN
 
 
 @dataclass(frozen=True)
@@ -228,6 +310,10 @@ def score_doc(
     counts = FloorCounts()
     problems: list[str] = []
     present: set[int] = set()
+    # One entry per present page's `generation` block (None when the page lacks it),
+    # rolled up to the per-doc label below. A doc whose pages disagree is contaminated
+    # (ADR-007, issue #98).
+    generations: list[object] = []
 
     for notes_path in sorted(notes_files):
         index = _page_index_of(notes_path)
@@ -238,6 +324,7 @@ def score_doc(
             continue
         if index is not None:
             present.add(index)
+        generations.append(data.get("generation"))
 
         structure_problems = validation.validate_structure(data)
         # The source streams for this notes-set's page; default index from `source`.
@@ -263,6 +350,16 @@ def score_doc(
             f"(missing/failed: {sorted(missing)})"
         )
 
+    # Roll the per-page generation settings up to a per-doc label (ADR-007, issue #98).
+    # A mixed doc is surfaced as a problem — a `--force` re-run at a new effort that left
+    # stale notes on the failed pages is contamination, not a clean low-vs-high point.
+    generation_rollup = roll_up_generation(generations)
+    if generation_rollup["mixed"]:
+        problems.append(
+            f"generation: pages were extracted under mixed settings "
+            f"(contaminated --force re-run?): {generation_rollup['distinct']}"
+        )
+
     return DocFloorScore(
         doc_id=doc_id,
         counts=counts + completeness,
@@ -270,6 +367,8 @@ def score_doc(
         expected_pages=sorted(expected),
         present_pages=sorted(present),
         missing_pages=sorted(missing),
+        generation=generation_rollup["setting"],
+        generation_mixed=generation_rollup["mixed"],
     )
 
 
@@ -336,8 +435,31 @@ def score_corpus(corpus_dir: str | Path, *, now: Optional[datetime] = None) -> F
         generated_at=(now or datetime.now(timezone.utc)).isoformat(),
         tool_version=build.build_identity(),
         floor_counts=aggregate,
+        generation=_corpus_generation(docs),
     )
     return FloorScore(fingerprint=fingerprint, docs=docs)
+
+
+def _corpus_generation(docs: list[DocFloorScore]) -> object:
+    """Roll every doc's generation label up to one corpus-level summary (ADR-007).
+
+    The corpus reads a single ``{model, effort, max_tokens}`` setting only when every
+    doc agrees on that one setting; any disagreement — a mixed doc, two docs at
+    different settings, or a concrete-vs-unknown split — reads as ``"mixed"``. All docs
+    unknown reads as ``"unknown"``. This mirrors the per-doc roll-up one level up: a
+    corpus is a clean comparison point only when uniformly generated.
+    """
+    any_mixed = any(d.generation_mixed for d in docs)
+    settings = [d.generation for d in docs if not d.generation_mixed]
+    concrete = [s for s in settings if isinstance(s, dict)]
+    has_unknown = any(s == GENERATION_UNKNOWN for s in settings)
+
+    distinct = sorted({_generation_key(s) for s in concrete}, key=str)
+    if not concrete and not any_mixed:
+        return GENERATION_UNKNOWN  # every doc unknown — uniformly unmeasured
+    if not any_mixed and len(distinct) == 1 and not has_unknown:
+        return _generation_dict(distinct[0])
+    return GENERATION_MIXED
 
 
 def _corpus_hash(doc_ids: list[str]) -> str:
@@ -477,6 +599,7 @@ def to_dict(score: FloorScore) -> dict:
             "corpus_hash": score.fingerprint.corpus_hash,
             "generated_at": score.fingerprint.generated_at,
             "tool_version": score.fingerprint.tool_version,
+            "generation": score.fingerprint.generation,
             "floor_counts": asdict(score.fingerprint.floor_counts),
         },
         "aggregate": _counts_with_rates(score.aggregate),
@@ -486,6 +609,8 @@ def to_dict(score: FloorScore) -> dict:
                 "counts": _counts_with_rates(d.counts),
                 "problems": d.problems,
                 "complete": d.is_complete,
+                "generation": d.generation,
+                "generation_mixed": d.generation_mixed,
                 "expected_pages": d.expected_pages,
                 "present_pages": d.present_pages,
                 "missing_pages": d.missing_pages,
@@ -599,6 +724,44 @@ class RunSummary:
     # The doc_ids that lost expected pages in this run — the page-losing signal a sweep
     # must see (ADR-007), so a partial run can't masquerade as a cleaner one.
     incomplete_docs: list[str]
+    # The run's recorded generation setting (the fingerprint roll-up, issue #98) and a
+    # flag when it is "mixed". A mixed-settings run is not a clean comparison point — the
+    # cli surfaces it loudly, the way it surfaces a page-losing run.
+    generation: object = GENERATION_UNKNOWN
+    generation_mixed: bool = False
+
+    @property
+    def generation_label(self) -> str:
+        """A short column label for this run's generation setting (issue #98).
+
+        ``"mixed"``/``"unknown"`` pass through; a concrete ``{model, effort, max_tokens}``
+        reads as a compact ``effort@max_tokens`` (the two settings a sweep actually
+        varies), falling back to the model when effort is absent."""
+        return generation_label(self.generation)
+
+
+def generation_label(generation: object) -> str:
+    """Render a generation value as a compact one-token column label (issue #98).
+
+    ``"mixed"`` / ``"unknown"`` (the marker strings) pass through unchanged. A concrete
+    ``{model, effort, max_tokens}`` block reads as ``effort@max_tokens`` — the axes a
+    low-vs-high sweep varies — degrading gracefully to whichever fields are present, and
+    to ``"unknown"`` only if the block carries nothing usable.
+    """
+    if isinstance(generation, str):
+        return generation
+    if not isinstance(generation, dict):
+        return GENERATION_UNKNOWN
+    effort = generation.get("effort")
+    max_tokens = generation.get("max_tokens")
+    model = generation.get("model")
+    if effort and max_tokens is not None:
+        return f"{effort}@{max_tokens}"
+    if effort:
+        return str(effort)
+    if model:
+        return str(model)
+    return GENERATION_UNKNOWN
 
 
 @dataclass(frozen=True)
@@ -619,6 +782,14 @@ class Comparison:
     def any_incomplete(self) -> bool:
         """True when any run lost expected pages — a page-losing run is in the set."""
         return any(not r.complete for r in self.runs)
+
+    @property
+    def any_mixed_generation(self) -> bool:
+        """True when any run was generated under mixed settings (issue #98).
+
+        A mixed-settings run is a ``--force`` re-run artifact, not a clean low-vs-high
+        data point — the cli surfaces it loudly, mirroring ``any_incomplete``."""
+        return any(r.generation_mixed for r in self.runs)
 
 
 def compare_scores(labelled: list[tuple[str, dict]]) -> Comparison:
@@ -661,6 +832,7 @@ def _summarise_run(label: str, data: dict) -> RunSummary:
         for d in docs
         if isinstance(d, dict) and (d.get("complete") is False or d.get("missing_pages"))
     ]
+    generation = fp.get("generation", GENERATION_UNKNOWN)
     return RunSummary(
         label=label,
         corpus_id=str(fp.get("corpus_id", "?")),
@@ -668,6 +840,8 @@ def _summarise_run(label: str, data: dict) -> RunSummary:
         tool_version=str(fp.get("tool_version", "?")),
         complete=not incomplete,
         incomplete_docs=incomplete,
+        generation=generation,
+        generation_mixed=generation == GENERATION_MIXED,
     )
 
 

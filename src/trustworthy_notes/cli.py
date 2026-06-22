@@ -1999,6 +1999,10 @@ def eval_cmd(
         f"corpus: {fp.corpus_id}  (hash {fp.corpus_hash})  "
         f"tool {fp.tool_version}  at {fp.generated_at}"
     )
+    # The generation provenance of the scored notes (issue #98): the corpus-level
+    # roll-up — one setting when uniform, `mixed` when contaminated, `unknown` for
+    # pre-#98 notes. Part of the fingerprint, surfaced beside it here.
+    typer.echo(f"generation: {eval_mod.generation_label(fp.generation)}")
     typer.echo("")
     typer.echo(
         f"{'anchored':>10} {'grounded':>10} {'excerpts':>9} {'stmts':>7} {'ref':>4} "
@@ -2215,10 +2219,6 @@ def eval_compare_cmd(
     labels = labels or []
     labelled: list[tuple[str, dict]] = []
     for i, path in enumerate(files):
-        # Label precedence: an explicit --label for this position, else the filename stem
-        # (so `score-low.json` reads as "score-low"). Falling back per-position means a
-        # partial label list (fewer --label than files) still labels every column.
-        label = labels[i] if i < len(labels) else path.stem
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -2233,6 +2233,12 @@ def eval_compare_cmd(
                 err=True,
             )
             raise typer.Exit(1)
+        # Label precedence (issue #98): an explicit --label for this position wins; else
+        # the run's *recorded generation setting* (so a low-vs-high sweep self-labels
+        # "low@..."/"high@..." from the notes' actual provenance); else the filename stem
+        # (the pre-#98 fallback, used when the score predates the generation field).
+        # Per-position fallback means a partial --label list still labels every column.
+        label = _compare_label(labels, i, path, data)
         labelled.append((label, data))
 
     comparison = eval_mod.compare_scores(labelled)
@@ -2240,11 +2246,31 @@ def eval_compare_cmd(
         typer.echo(line)
 
 
+def _compare_label(labels: list[str], i: int, path: "Path", data: dict) -> str:  # noqa: F821
+    """Resolve one column's label by the issue-#98 precedence.
+
+    Explicit ``--label`` for this position wins; else the run's recorded generation
+    setting (``eval``'s fingerprint roll-up, rendered compactly); else the filename stem.
+    A score predating the generation field reads as ``"unknown"`` generation, so it falls
+    through to the stem rather than labelling every old run identically.
+    """
+    from . import eval as eval_mod
+
+    if i < len(labels):
+        return labels[i]
+    generation = (data.get("fingerprint") or {}).get("generation", eval_mod.GENERATION_UNKNOWN)
+    if generation != eval_mod.GENERATION_UNKNOWN:
+        return eval_mod.generation_label(generation)
+    return path.stem
+
+
 def _format_comparison(comparison: "eval.Comparison") -> list[str]:  # noqa: F821
     """Render a :class:`eval.Comparison` as an aligned plain-text table (no table libs).
 
     Leads with the corpus-comparability line (the ADR-007 fingerprint guard): ✓ same
-    corpus, or ⚠ NOT COMPARABLE when the runs scored different documents. Then a column
+    corpus, or ⚠ NOT COMPARABLE when the runs scored different documents — then a loud
+    MIXED-SETTINGS warning for any run whose notes were generated under mixed settings
+    (a `--force` re-run artifact, not a clean low-vs-high point, issue #98). Then a column
     per run, a row per metric with the first→last Δ, and an INCOMPLETE note for any
     page-losing run so a partial extraction can never read as the cleaner result.
     """
@@ -2267,6 +2293,14 @@ def _format_comparison(comparison: "eval.Comparison") -> list[str]:  # noqa: F82
         lines.append(
             "  corpus hashes: "
             + ", ".join(f"{r.label}={r.corpus_hash}" for r in runs)
+        )
+    if comparison.any_mixed_generation:
+        # Loud, in the header: a mixed-settings run is a `--force` re-run artifact whose
+        # number can't be attributed to a single setting (issue #98) — not comparable.
+        mixed = ", ".join(f"'{r.label}'" for r in runs if r.generation_mixed)
+        lines.append(
+            f"⚠ MIXED SETTINGS — run(s) {mixed} were generated under mixed settings "
+            "(a --force re-run artifact, not a clean low-vs-high data point)."
         )
     lines.append("")
 

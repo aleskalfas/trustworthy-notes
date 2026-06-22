@@ -79,15 +79,52 @@ def anchor_gate(notes: dict, page: PageText) -> tuple[dict, list[dict]]:
         "statements": statements,
         "relations": relations,
     }
+    # Carry the generation provenance through unchanged when present (issue #98); the
+    # gate rebuilds the notes dict from the survivors, so an additive top-level block
+    # would otherwise be dropped. Omitted when absent, keeping pre-#98 notes unchanged.
+    if "generation" in notes:
+        cleaned["generation"] = notes["generation"]
     return cleaned, dropped
 
 
-def _finalize(raw: dict, page: PageText, document: str) -> tuple[dict, list[dict]]:
-    """Stamp the authoritative source onto a raw notes dict, then anchor-gate."""
+def _generation_of(extractor: Extractor) -> Optional[dict]:
+    """The extractor's generation settings as a stamp block, or None if unavailable.
+
+    Reads ``model``/``effort``/``max_tokens`` off the extractor instance — the settings
+    that *produced* the notes (issue #98). Recorded per page so the fact rides along for
+    free through note-copying capture and lets ``eval`` detect a doc whose pages were
+    generated under *mixed* settings (ADR-007). An extractor that exposes none of these
+    (a bare test stub) yields None, so the block is simply omitted — backward-compatible
+    with notes made before the field existed (they read as "unknown" generation).
+    """
+    model = getattr(extractor, "model", None)
+    effort = getattr(extractor, "effort", None)
+    max_tokens = getattr(extractor, "max_tokens", None)
+    if model is None and effort is None and max_tokens is None:
+        return None
+    return {"model": model, "effort": effort, "max_tokens": max_tokens}
+
+
+def _finalize(
+    raw: dict,
+    page: PageText,
+    document: str,
+    generation: Optional[dict] = None,
+) -> tuple[dict, list[dict]]:
+    """Stamp the authoritative source onto a raw notes dict, then anchor-gate.
+
+    ``generation`` (the model/effort/max-tokens that made these notes, issue #98) is
+    stamped beside the per-page ``source`` block when supplied; omitted when None so
+    notes stay valid without it (the field is additive — ADR-007). It is the production
+    settings of the *notes*, distinct from the out-of-band token ``usage`` a caller may
+    also collect, which stays a pricing concern and never enters the notes payload.
+    """
     source = {"document": document, "scope": "page", "page_index": page.page_index}
     if page.page_label is not None:
         source["page_label"] = page.page_label
     raw = {**raw, "schema_version": 1, "source": source}
+    if generation is not None:
+        raw["generation"] = generation
     return anchor_gate(raw, page)
 
 
@@ -96,7 +133,7 @@ def run_extract(
 ) -> tuple[dict, list[dict]]:
     """Extract a page's notes, stamp the authoritative source, and anchor-gate."""
     raw = extractor.extract(page, context)
-    return _finalize(raw, page, document)
+    return _finalize(raw, page, document, _generation_of(extractor))
 
 
 def run_extract_with_usage(
@@ -114,7 +151,7 @@ def run_extract_with_usage(
         raw, usage = fn(page, context)
     else:
         raw, usage = extractor.extract(page, context), None
-    notes, dropped = _finalize(raw, page, document)
+    notes, dropped = _finalize(raw, page, document, _generation_of(extractor))
     return notes, dropped, usage
 
 

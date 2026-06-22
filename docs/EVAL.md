@@ -19,8 +19,19 @@ first. The binding rules it sets, applied here:
   **not built** (building the naive form is the failure mode the ADR forbids).
 - **A reading is only comparable next to its fingerprint.** Every score carries an
   instrument fingerprint: corpus id, a hash of the doc list, the timestamp, the
-  tool/build version, and the floor counts (including the **completeness** counts).
-  Change the instrument (the corpus, the build) and you cannot compare across runs.
+  tool/build version, the **generation setting** that produced the scored notes
+  (model / effort / max-tokens), and the floor counts (including the **completeness**
+  counts). Change the instrument (the corpus, the build) and you cannot compare across
+  runs.
+- **The score records the setting that made the notes.** Each page's notes carry the
+  `generation` block — the `model`/`effort`/`max_tokens` the extractor ran at — and
+  `eval` rolls it up to a per-doc label, and again to a corpus-level summary in the
+  fingerprint: one setting when every page/doc agrees, `mixed` when they disagree, or
+  `unknown` for notes generated before the field existed (it is additive — old notes
+  stay valid and simply read as `unknown`). A doc whose pages were generated under
+  **mixed** settings — the artifact of a `--force` re-run at a new effort that left
+  stale notes on the pages that failed — is flagged as contaminated: it is not a clean
+  low-vs-high data point, and `eval-compare` surfaces it loudly.
 - **The floor is completeness-aware.** Anchoring/grounding are computed only over the
   notes that *exist* — so a run that silently lost pages (extraction failed mid-sweep,
   stale notes left behind) could read a *higher, perfect* number for *less* of the
@@ -98,13 +109,17 @@ The procedure:
 
    It lines the runs up as columns and shows the first→last Δ on each metric
    (rates as percentage points; counts on the numerator — e.g. statements 163 → 248
-   reads `+85`). `--label` is optional; omitted, columns are labelled by filename
-   stem. The table **leads with a comparability line**: `✓ same corpus` when every
-   run shares one `corpus_hash`, or a loud `⚠ NOT COMPARABLE — different corpus`
+   reads `+85`). **Column labels are automatic**: each column is labelled by the run's
+   *recorded generation setting* (e.g. `low@32000`, `high@48000`), so a sweep
+   self-labels from the notes' actual provenance. `--label` overrides this per column;
+   a score that predates the generation field (no recorded setting) falls back to the
+   filename stem. The table **leads with a comparability line**: `✓ same corpus` when
+   every run shares one `corpus_hash`, or a loud `⚠ NOT COMPARABLE — different corpus`
    when they don't (a fingerprint mismatch means you compared *different documents*,
-   not different settings — ADR-007). It also flags any **incomplete** run
-   (`⚠ INCOMPLETE`), so a page-losing run can't look "better" for having
-   fewer-but-cleaner notes.
+   not different settings — ADR-007). It also flags any **mixed-settings** run
+   (`⚠ MIXED SETTINGS`) — a `--force` re-run artifact whose number can't be attributed
+   to one setting — and any **incomplete** run (`⚠ INCOMPLETE`), so neither a
+   contaminated nor a page-losing run can look "better".
 4. The floor can't see *mischaracterization* (a real quote, wrongly described), so
    also apply the **spot-check rubric** below on a few pages per setting.
 5. If a setting clearly wins on both, change the default (`DEFAULT_EFFORT` /
@@ -165,6 +180,13 @@ whole generated doc into your corpus in one command:
 Reading the source streams cli-side at capture time keeps `eval` itself
 import-isolated from the pipeline (it scores the manifest the capture *wrote*; it never
 re-reads a PDF — ADR-007). This supersedes the throwaway corpus-builder script.
+
+The per-page notes already carry their `generation` block (the model/effort/max-tokens
+that made them), so capture is a plain copy — the generation provenance rides along for
+free, and `eval` reads it from the copied notes to label and contamination-check the
+doc. Capturing a doc whose pages were generated under mixed settings (a `--force`
+re-run that left stale notes on the failed pages) preserves that split, so the score
+flags it as `mixed` rather than mis-attributing the number to a single setting.
 
 If the document has expected pages with no notes (a failed/partial extraction),
 `add-doc` says so immediately (`INCOMPLETE … MISSING [...]`) — re-extract those pages

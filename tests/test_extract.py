@@ -89,6 +89,65 @@ def test_write_notes_round_trips(tmp_path):
     assert yaml.safe_load(dest.read_text()) == notes
 
 
+# ---- generation provenance stamp (issue #98), synthetic page, no PDF ----
+
+
+class _StubExtractorWithSettings:
+    """A stub extractor exposing model/effort/max_tokens, like AnthropicExtractor."""
+
+    def __init__(self, notes: dict, *, model: str, effort: str, max_tokens: int):
+        self._notes = notes
+        self.model = model
+        self.effort = effort
+        self.max_tokens = max_tokens
+
+    def extract(self, page, context=None):
+        return copy.deepcopy(self._notes)
+
+
+def _synthetic_notes() -> dict:
+    return {
+        "schema_version": 1,
+        "terms": [],
+        "evidence": [{"id": "e-1", "excerpt": "alpha beta", "source": "body"}],
+        "statements": [
+            {"id": "s-1", "type": "claim", "text": "a claim", "evidence": ["e-1"]}
+        ],
+        "relations": [],
+    }
+
+
+def _synthetic_page() -> PageText:
+    return PageText(
+        page_index=0, page_number=1, text="alpha beta gamma",
+        width=0.0, height=0.0, footnotes="",
+    )
+
+
+def test_run_extract_stamps_generation_and_stays_valid():
+    """A note from an extractor with settings carries `generation` and validates."""
+    extractor = _StubExtractorWithSettings(
+        _synthetic_notes(), model="claude-x", effort="high", max_tokens=48000
+    )
+    notes, _ = run_extract(_synthetic_page(), extractor, document="d")
+
+    assert notes["generation"] == {
+        "model": "claude-x", "effort": "high", "max_tokens": 48000,
+    }
+    assert isinstance(notes["generation"]["max_tokens"], int)
+    # The schema now declares `generation`, so a stamped note still passes structure.
+    assert not validate_structure(notes)
+
+
+def test_note_without_generation_still_validates():
+    """Backward compat: a note lacking `generation` (pre-#98) is still schema-valid."""
+    extractor = _StubExtractor(_synthetic_notes())  # no settings → no generation block
+    notes, _ = run_extract(_synthetic_page(), extractor, document="d")
+
+    assert "generation" not in notes
+    assert not validate_structure(notes)
+
+
 # ---- end to end against the real page (PDF-gated) ----
 
 @pytest.mark.skipif(not PDFS, reason="no test PDF under data/ (gitignored)")

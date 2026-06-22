@@ -35,38 +35,58 @@ _SOURCE_TEXT = (
 )
 
 
-def _write_doc(corpus: Path, doc_id: str, *, excerpt: str) -> None:
+def _write_doc(
+    corpus: Path, doc_id: str, *, excerpt: str, generation: dict | None = None
+) -> None:
     """Author a one-page doc into ``corpus``: its source page + one notes-set.
 
     ``excerpt`` is the single text-evidence excerpt — a verbatim span of the source
     anchors (§7.2), an altered one fails. The lone statement always cites it, so the
-    grounding rate (§7.1) over these corpora is 1.0.
+    grounding rate (§7.1) over these corpora is 1.0. ``generation`` stamps a per-page
+    generation provenance block (issue #98) when given; omitted means a pre-#98 note.
+    """
+    _write_doc_pages(
+        corpus, doc_id,
+        pages=[{"page_index": 0, "excerpt": excerpt, "generation": generation}],
+    )
+
+
+def _write_doc_pages(corpus: Path, doc_id: str, *, pages: list[dict]) -> None:
+    """Author a multi-page doc: each entry is ``{page_index, excerpt, generation?}``.
+
+    Lets a test build a doc whose pages carry *different* generation settings (or none),
+    the input the per-doc generation roll-up (issue #98) must classify as mixed/unknown.
     """
     doc_dir = corpus / doc_id
     extract = doc_dir / "1-extract"
     extract.mkdir(parents=True, exist_ok=True)
+    source_pages = [
+        {"page_index": p["page_index"], "text": _SOURCE_TEXT, "footnotes": "",
+         "expected_notes": True}
+        for p in pages
+    ]
     (doc_dir / "source-pages.yaml").write_text(
-        yaml.safe_dump({"pages": [{"page_index": 0, "text": _SOURCE_TEXT, "footnotes": ""}]}),
-        encoding="utf-8",
+        yaml.safe_dump({"pages": source_pages}), encoding="utf-8",
     )
-    notes = {
-        "schema_version": 1,
-        "source": {"document": doc_id, "scope": "page", "page_index": 0},
-        "terms": [],
-        "evidence": [{"id": "e-1", "kind": "text", "excerpt": excerpt, "source": "body"}],
-        "statements": [
-            {
-                "id": "s-1",
-                "type": "claim",
-                "text": "A claim about the lighthouse.",
-                "evidence": ["e-1"],
-            }
-        ],
-        "relations": [],
-    }
-    (extract / "page-0000.notes.yaml").write_text(
-        yaml.safe_dump(notes, sort_keys=False), encoding="utf-8"
-    )
+    for p in pages:
+        notes = {
+            "schema_version": 1,
+            "source": {"document": doc_id, "scope": "page", "page_index": p["page_index"]},
+            "terms": [],
+            "evidence": [
+                {"id": "e-1", "kind": "text", "excerpt": p["excerpt"], "source": "body"}
+            ],
+            "statements": [
+                {"id": "s-1", "type": "claim",
+                 "text": "A claim about the lighthouse.", "evidence": ["e-1"]}
+            ],
+            "relations": [],
+        }
+        if p.get("generation") is not None:
+            notes["generation"] = p["generation"]
+        (extract / f"page-{p['page_index']:04d}.notes.yaml").write_text(
+            yaml.safe_dump(notes, sort_keys=False), encoding="utf-8"
+        )
 
 
 # --- floor scoring: known-good and known-bad -----------------------------------
@@ -240,6 +260,90 @@ def test_completeness_is_in_the_fingerprint(tmp_path):
     fp = eval_mod.score_corpus(corpus).fingerprint
     assert fp.floor_counts.pages_expected == 2
     assert fp.floor_counts.pages_present == 1
+
+
+# --- generation provenance roll-up (ADR-007, issue #98) ------------------------
+
+_LOW = {"model": "claude-x", "effort": "low", "max_tokens": 32000}
+_HIGH = {"model": "claude-x", "effort": "high", "max_tokens": 48000}
+_SPAN = "The lighthouse at Cragmouth was first lit in 1869."
+
+
+def test_score_doc_uniform_generation_rolls_up_to_that_setting(tmp_path):
+    """Every page same {model,effort,max_tokens} → the doc's generation is that setting."""
+    corpus = tmp_path / "uniform"
+    _write_doc_pages(corpus, "doc-a", pages=[
+        {"page_index": 0, "excerpt": _SPAN, "generation": _LOW},
+        {"page_index": 1, "excerpt": "the lamp burned whale oil", "generation": _LOW},
+    ])
+
+    doc = eval_mod.score_corpus(corpus).docs[0]
+    assert doc.generation == _LOW
+    assert doc.generation_mixed is False
+    assert not any("generation:" in p for p in doc.problems)
+
+
+def test_score_doc_disagreeing_pages_flag_mixed_with_the_distinct_set(tmp_path):
+    """Pages under different settings → generation_mixed True + the distinct settings."""
+    corpus = tmp_path / "mixed"
+    _write_doc_pages(corpus, "doc-a", pages=[
+        {"page_index": 0, "excerpt": _SPAN, "generation": _LOW},
+        {"page_index": 1, "excerpt": "the lamp burned whale oil", "generation": _HIGH},
+    ])
+
+    doc = eval_mod.score_corpus(corpus).docs[0]
+    assert doc.generation == eval_mod.GENERATION_MIXED
+    assert doc.generation_mixed is True
+    # The distinct settings are surfaced so a report shows exactly what got mingled.
+    rollup = eval_mod.roll_up_generation([_LOW, _HIGH])
+    assert _LOW in rollup["distinct"] and _HIGH in rollup["distinct"]
+    # A contamination flag is raised as a problem (the --force re-run artifact).
+    assert any("generation:" in p and "mixed" in p for p in doc.problems)
+
+
+def test_score_doc_known_and_unknown_mix_is_a_contamination_flag(tmp_path):
+    """A known setting beside an unknown (pre-#98) page is also mixed/contaminated."""
+    corpus = tmp_path / "half-stamped"
+    _write_doc_pages(corpus, "doc-a", pages=[
+        {"page_index": 0, "excerpt": _SPAN, "generation": _LOW},
+        {"page_index": 1, "excerpt": "the lamp burned whale oil", "generation": None},
+    ])
+
+    doc = eval_mod.score_corpus(corpus).docs[0]
+    assert doc.generation == eval_mod.GENERATION_MIXED
+    assert doc.generation_mixed is True
+
+
+def test_score_doc_all_unknown_reads_as_unknown_not_mixed(tmp_path):
+    """No page recorded settings (pre-#98 corpus) → generation 'unknown', not a flag."""
+    corpus = tmp_path / "pre98"
+    _write_doc(corpus, "doc-a", excerpt=_SPAN)  # no generation stamped
+
+    doc = eval_mod.score_corpus(corpus).docs[0]
+    assert doc.generation == eval_mod.GENERATION_UNKNOWN
+    assert doc.generation_mixed is False
+
+
+def test_score_json_surfaces_per_doc_and_corpus_generation(tmp_path):
+    """The serialised score carries per-doc generation + the corpus-level fingerprint summary."""
+    corpus = tmp_path / "gen-json"
+    _write_doc(corpus, "doc-a", excerpt=_SPAN, generation=_LOW)
+    _write_doc(corpus, "doc-b", excerpt="the lamp burned whale oil", generation=_LOW)
+
+    out = eval_mod.to_dict(eval_mod.score_corpus(corpus))
+    assert out["fingerprint"]["generation"] == _LOW  # corpus agrees → uniform
+    assert all(d["generation"] == _LOW for d in out["docs"])
+    assert all(d["generation_mixed"] is False for d in out["docs"])
+
+
+def test_corpus_generation_is_mixed_when_docs_disagree(tmp_path):
+    """Two docs at different settings → the corpus-level fingerprint reads 'mixed'."""
+    corpus = tmp_path / "corpus-mixed"
+    _write_doc(corpus, "doc-a", excerpt=_SPAN, generation=_LOW)
+    _write_doc(corpus, "doc-b", excerpt="the lamp burned whale oil", generation=_HIGH)
+
+    out = eval_mod.to_dict(eval_mod.score_corpus(corpus))
+    assert out["fingerprint"]["generation"] == eval_mod.GENERATION_MIXED
 
 
 # --- determinism ---------------------------------------------------------------
@@ -457,26 +561,32 @@ def _score_json(
     pages_present: int = 1,
     pages_expected: int = 1,
     missing: list[int] | None = None,
+    generation: object = None,
 ) -> Path:
     """Write a minimal-but-valid floor-score JSON (the shape `to_dict` emits) to ``path``.
 
     Lets a compare test fix the counts directly without standing up a whole corpus. The
     rates are derived the way `_counts_with_rates` would, so the artifact is consistent.
+    ``generation`` stamps the fingerprint's generation summary (issue #98) when given —
+    a concrete setting, ``"mixed"``, or left absent to model a pre-#98 score.
     """
     missing = missing or []
     grounded_rate = 1.0 if statements_total == 0 else statements_grounded / statements_total
     anchored_rate = 1.0 if excerpts_total == 0 else excerpts_anchored / excerpts_total
     complete_rate = 1.0 if pages_expected == 0 else pages_present / pages_expected
+    fingerprint = {
+        "corpus_id": "my-corpus",
+        "corpus_hash": corpus_hash,
+        "generated_at": "2026-06-22T00:00:00+00:00",
+        "tool_version": "test-build",
+        "floor_counts": {},
+    }
+    if generation is not None:
+        fingerprint["generation"] = generation
     data = {
         "schema_version": eval_mod.SCORE_SCHEMA_VERSION,
         "kind": "floor-only",
-        "fingerprint": {
-            "corpus_id": "my-corpus",
-            "corpus_hash": corpus_hash,
-            "generated_at": "2026-06-22T00:00:00+00:00",
-            "tool_version": "test-build",
-            "floor_counts": {},
-        },
+        "fingerprint": fingerprint,
         "aggregate": {
             "statements_total": statements_total,
             "statements_grounded": statements_grounded,
@@ -554,6 +664,81 @@ def test_compare_through_cli_labels_from_option(tmp_path):
     ])
     assert result.exit_code == 0, result.output
     assert "effort-low" in result.output and "effort-high" in result.output
+
+
+def test_compare_labels_columns_by_recorded_generation(tmp_path):
+    """No --label → columns labelled by the run's recorded generation (issue #98)."""
+    _score_json(tmp_path / "a.json", corpus_hash="h1",
+                statements_grounded=10, statements_total=10,
+                generation={"model": "m", "effort": "low", "max_tokens": 32000})
+    _score_json(tmp_path / "b.json", corpus_hash="h1",
+                statements_grounded=20, statements_total=20,
+                generation={"model": "m", "effort": "high", "max_tokens": 48000})
+
+    result = runner.invoke(
+        cli.app, ["eval-compare", str(tmp_path / "a.json"), str(tmp_path / "b.json")]
+    )
+    assert result.exit_code == 0, result.output
+    # The compact effort@max_tokens label, not the filename stem.
+    assert "low@32000" in result.output
+    assert "high@48000" in result.output
+
+
+def test_compare_explicit_label_beats_recorded_generation(tmp_path):
+    """--label wins over the recorded generation setting (issue #98 precedence)."""
+    _score_json(tmp_path / "a.json", corpus_hash="h1",
+                statements_grounded=10, statements_total=10,
+                generation={"model": "m", "effort": "low", "max_tokens": 32000})
+    _score_json(tmp_path / "b.json", corpus_hash="h1",
+                statements_grounded=20, statements_total=20,
+                generation={"model": "m", "effort": "high", "max_tokens": 48000})
+
+    result = runner.invoke(cli.app, [
+        "eval-compare", str(tmp_path / "a.json"), str(tmp_path / "b.json"),
+        "--label", "before", "--label", "after",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "before" in result.output and "after" in result.output
+    assert "low@32000" not in result.output  # explicit label suppressed the generation one
+
+
+def test_compare_falls_back_to_stem_when_generation_unknown(tmp_path):
+    """A pre-#98 score (no recorded generation) still labels by the filename stem."""
+    _score_json(tmp_path / "old-low.json", corpus_hash="h1",
+                statements_grounded=10, statements_total=10)  # no generation
+    _score_json(tmp_path / "old-high.json", corpus_hash="h1",
+                statements_grounded=20, statements_total=20)
+
+    result = runner.invoke(cli.app, [
+        "eval-compare", str(tmp_path / "old-low.json"), str(tmp_path / "old-high.json")
+    ])
+    assert result.exit_code == 0, result.output
+    assert "old-low" in result.output and "old-high" in result.output
+
+
+def test_compare_flags_a_mixed_settings_run_in_the_header(tmp_path):
+    """A run whose generation is 'mixed' is flagged loudly in the header (issue #98)."""
+    _score_json(tmp_path / "clean.json", corpus_hash="h1",
+                statements_grounded=10, statements_total=10,
+                generation={"model": "m", "effort": "low", "max_tokens": 32000})
+    _score_json(tmp_path / "dirty.json", corpus_hash="h1",
+                statements_grounded=20, statements_total=20,
+                generation=eval_mod.GENERATION_MIXED)
+
+    comparison = eval_mod.compare_scores([
+        ("clean", json.loads((tmp_path / "clean.json").read_text())),
+        ("dirty", json.loads((tmp_path / "dirty.json").read_text())),
+    ])
+    assert comparison.any_mixed_generation
+    dirty = next(r for r in comparison.runs if r.label == "dirty")
+    assert dirty.generation_mixed
+
+    result = runner.invoke(
+        cli.app, ["eval-compare", str(tmp_path / "clean.json"), str(tmp_path / "dirty.json"),
+                  "--label", "clean", "--label", "dirty"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "MIXED SETTINGS" in result.output
 
 
 def test_compare_warns_when_corpus_hash_differs(tmp_path):
