@@ -219,6 +219,11 @@ def run(
         help="Override the reasoning effort for this run: low/medium/high (else config/default). "
         "Mainly for tuning quality against `tnotes eval`.",
     ),
+    max_tokens: int = typer.Option(
+        None, "--max-tokens",
+        help="Raise the per-page extraction token budget (default 32000). Use when high "
+        "effort exhausts the budget while thinking and pages fail.",
+    ),
 ):
     """One-command book generation: run the whole pipeline on a bare PDF.
 
@@ -275,7 +280,7 @@ def run(
     try:
         book_pdf = pipeline.run(
             pdf, pages=pages, force=force, cite=cite, keep_md=md,
-            model=model, effort=effort, log=log, parse_pages=_parse_pages
+            model=model, effort=effort, max_tokens=max_tokens, log=log, parse_pages=_parse_pages
         )
     except ValueError as exc:
         typer.echo(f"tnotes: {exc}", err=True)

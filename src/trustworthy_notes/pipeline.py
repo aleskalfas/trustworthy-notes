@@ -76,6 +76,7 @@ def run(
     style: str = "outline",
     model: Optional[str] = None,
     effort: Optional[str] = None,
+    max_tokens: Optional[int] = None,
     log: Callable[[str], None] = lambda msg: None,
     parse_pages: Callable[[str, int], list[int]],
 ) -> Path:
@@ -93,7 +94,8 @@ def run(
     log(f"tnotes: {input_path.name} → {book_path(input_path, pages).name}")
     log(f"model {model} (effort={effort or 'none'}){' [force: regenerating all]' if force else ''}")
 
-    _extract(input_path, work, pages, force, model, effort, api_key, parse_pages, log)
+    _extract(input_path, work, pages, force, model, effort, api_key, parse_pages, log,
+             max_tokens=max_tokens)
     _build_terms(input_path, work, force, model, effort, api_key, log)
     _build_dedup(input_path, work, force, model, effort, api_key, log)
     _build_relations(input_path, work, force, model, effort, api_key, log)
@@ -102,7 +104,8 @@ def run(
     return _book(input_path, work, pages, cite, style, log, keep_md=keep_md)
 
 
-def _extract(input_path, work, pages, force, model, effort, api_key, parse_pages, log) -> None:
+def _extract(input_path, work, pages, force, model, effort, api_key, parse_pages, log,
+             *, max_tokens=None) -> None:
     """Wave 1: per-page notes. Already-extracted pages are skipped unless ``force``."""
     all_pages = ingest.read_pages(input_path)
     by_number = {p.page_number: p for p in all_pages}
@@ -114,7 +117,10 @@ def _extract(input_path, work, pages, force, model, effort, api_key, parse_pages
         raise ValueError(f"no extractable pages selected from {input_path.name}")
 
     workspace.extract_dir(work).mkdir(parents=True, exist_ok=True)
-    extractor = AnthropicExtractor(model=model, effort=effort, api_key=api_key)
+    # max_tokens=None → the extractor's own default (32000); raise it when a dense
+    # page exhausts the budget while thinking at higher effort (issue #93).
+    extra = {"max_tokens": max_tokens} if max_tokens else {}
+    extractor = AnthropicExtractor(model=model, effort=effort, api_key=api_key, **extra)
 
     todo: list[int] = []
     for n in selected:

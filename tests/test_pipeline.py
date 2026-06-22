@@ -140,6 +140,25 @@ def test_runs_every_stage_in_order_and_writes_book(tmp_path, stub_pipeline):
         "extract:1", "extract:2", "extract:3"}
 
 
+def test_max_tokens_threads_to_extractor(tmp_path, stub_pipeline, monkeypatch):
+    # #93: --max-tokens reaches AnthropicExtractor; absent → not passed (class default).
+    seen = {}
+    monkeypatch.setattr(pipeline, "AnthropicExtractor",
+                        lambda **kw: seen.update(kw) or object())
+    src = _src(tmp_path)
+    pipeline.run(src, max_tokens=64000, parse_pages=_parse_pages)
+    assert seen.get("max_tokens") == 64000
+
+
+def test_max_tokens_absent_uses_extractor_default(tmp_path, stub_pipeline, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(pipeline, "AnthropicExtractor",
+                        lambda **kw: seen.update(kw) or object())
+    src = _src(tmp_path)
+    pipeline.run(src, parse_pages=_parse_pages)
+    assert "max_tokens" not in seen  # None → omitted, so the extractor's own default applies
+
+
 def test_default_run_writes_only_pdf_not_md(tmp_path, stub_pipeline):
     # #73: the one-command flow leaves a single book file (the PDF) beside the source.
     src = _src(tmp_path)
