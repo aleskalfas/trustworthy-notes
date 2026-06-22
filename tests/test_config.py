@@ -50,6 +50,12 @@ def test_set_get_effort_round_trip(cfg):
     assert cfg.get_effort() == "medium"
 
 
+def test_set_get_language_round_trip(cfg):
+    assert cfg.get_language() is None  # unset
+    cfg.set_language("cs")
+    assert cfg.get_language() == "cs"
+
+
 def test_set_get_eval_corpus_dir_round_trip(cfg):
     assert cfg.get_eval_corpus_dir() is None  # unset
     cfg.set_eval_corpus_dir("/path/to/private/eval-corpus")
@@ -66,9 +72,11 @@ def test_model_and_effort_do_not_clobber_api_key(cfg):
     cfg.set_api_key("sk-keep")
     cfg.set_model("claude-opus-4-8")
     cfg.set_effort("high")
+    cfg.set_language("cs")
     assert cfg.get_api_key() == "sk-keep"
     assert cfg.get_model() == "claude-opus-4-8"
     assert cfg.get_effort() == "high"
+    assert cfg.get_language() == "cs"
 
 
 def test_resolve_built_in_when_nothing_set(cfg):
@@ -151,3 +159,76 @@ def test_set_feedback_repo_normalises_url_to_owner_name(cfg, raw, expected):
     # the storage boundary canonicalises to owner/name regardless of entry point.
     cfg.set_feedback_repo(raw)
     assert cfg.get_feedback_repo() == expected
+
+
+def test_resolve_language_built_in_when_nothing_set(cfg):
+    # No flag, nothing configured: the built-in "en" default applies (ADR-008).
+    assert cfg.resolve_language(None) == "en"
+
+
+def test_resolve_language_config_wins_over_built_in(cfg):
+    cfg.set_language("cs")
+    assert cfg.resolve_language(None) == "cs"
+
+
+def test_resolve_language_flag_wins_over_config(cfg):
+    cfg.set_language("cs")
+    # An explicit flag beats both config and the built-in default.
+    assert cfg.resolve_language("ja") == "ja"
+
+
+def test_resolve_language_does_not_read_os_locale(cfg, monkeypatch):
+    # ADR-008 keeps platform I/O off the hot resolve path: resolution must reach
+    # the built-in default without ever calling detect_os_language.
+    def _boom():
+        raise AssertionError("resolve_language must not read the OS locale")
+
+    monkeypatch.setattr(cfg, "detect_os_language", _boom)
+    assert cfg.resolve_language(None) == "en"
+
+
+@pytest.mark.parametrize(
+    "stubbed,expected",
+    [
+        ("cs_CZ.UTF-8", "cs"),
+        ("en-US", "en"),
+        ("en_US", "en"),
+        ("ja_JP", "ja"),
+        ("pt_BR.UTF-8", "pt"),
+    ],
+)
+def test_detect_os_language_returns_language_part(cfg, monkeypatch, stubbed, expected):
+    # The bare language subtag is recovered from the stubbed locale, with any
+    # territory and encoding stripped and both _/- separators accepted.
+    monkeypatch.setattr(cfg.locale, "getlocale", lambda *a: (stubbed, "UTF-8"))
+    assert cfg.detect_os_language() == expected
+
+
+@pytest.mark.parametrize("stubbed", [None, "", "C", "POSIX"])
+def test_detect_os_language_none_when_locale_unset(cfg, monkeypatch, stubbed):
+    # An unset / sentinel locale and no usable env locale read as None, never as a
+    # spurious language code.
+    monkeypatch.setattr(cfg.locale, "getlocale", lambda *a: (stubbed, None))
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(var, raising=False)
+    assert cfg.detect_os_language() is None
+
+
+def test_detect_os_language_none_when_locale_raises(cfg, monkeypatch):
+    # Fully fail-safe: any error from the platform read collapses to None so the
+    # caller can fall back to DEFAULT_LANGUAGE (ADR-008).
+    def _raise(*a):
+        raise ValueError("unknown locale")
+
+    monkeypatch.setattr(cfg.locale, "getlocale", _raise)
+    assert cfg.detect_os_language() is None
+
+
+def test_detect_os_language_falls_back_to_env_locale(cfg, monkeypatch):
+    # When getlocale yields nothing, the LC_ALL/LC_MESSAGES/LANG env locale is
+    # consulted (the precedence getdefaultlocale used before it was deprecated).
+    monkeypatch.setattr(cfg.locale, "getlocale", lambda *a: (None, None))
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+    monkeypatch.setenv("LANG", "cs_CZ.UTF-8")
+    assert cfg.detect_os_language() == "cs"
