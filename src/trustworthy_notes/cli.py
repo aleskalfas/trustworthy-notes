@@ -1890,13 +1890,14 @@ def feedback(
 
 @app.command(name="install-droplet")
 def install_droplet():
-    """Drop a "Send Feedback" launcher on your macOS Desktop (ADR-005).
+    """Drop the "Make Notes" and "Send Feedback" launchers on your macOS Desktop (ADR-005).
 
-    Compiles an AppleScript droplet that opens Terminal running `tnotes feedback`
-    when you drag a PDF onto it (or double-click it for a general report). Run by
-    `scripts/bootstrap.sh` after install; safe to re-run any time (e.g. after moving
-    or reinstalling `tnotes`, which re-bakes the absolute path the droplet targets).
-    macOS only — on any other OS it prints a note and exits cleanly (no error).
+    Compiles two AppleScript droplets: "Make Notes" runs the whole pipeline on a PDF
+    dragged onto it (`tnotes <pdf>`), and "Send Feedback" opens `tnotes feedback` on a
+    dragged PDF (or a general report on double-click). Run by `scripts/bootstrap.sh`
+    after install; safe to re-run any time (e.g. after moving or reinstalling `tnotes`,
+    which re-bakes the absolute path the droplets target). macOS only — on any other OS
+    it prints a note and exits cleanly (no error).
     """
     from . import maclaunch
 
@@ -1907,21 +1908,45 @@ def install_droplet():
         typer.echo("install-droplet is macOS only — there's nothing to install on this OS.")
         return
 
-    if maclaunch.create_feedback_droplet():
-        droplet = Path.home() / "Desktop" / "Send Feedback.app"
-        typer.echo(f"Created the Send Feedback droplet at {droplet}.")
-        typer.echo("Drag a PDF onto it to report a problem, or double-click it for a general report.")
-        typer.echo(
-            "The first time you use it, macOS will ask you to allow it to control "
-            "Terminal — that's a one-time consent."
-        )
-    else:
-        typer.echo(
-            "Couldn't create the Send Feedback droplet (osacompile failed). "
+    desktop = Path.home() / "Desktop"
+    # Each droplet is attempted independently so one failure never silently skips the
+    # other; we collect per-droplet success and exit non-zero if any failed.
+    droplets = [
+        (
+            "Make Notes",
+            maclaunch.create_make_notes_droplet,
+            desktop / "Make Notes.app",
+            "Drag a PDF onto it to turn it into a book — no terminal needed.",
+            "You can still run `tnotes <pdf>` directly.",
+        ),
+        (
+            "Send Feedback",
+            maclaunch.create_feedback_droplet,
+            desktop / "Send Feedback.app",
+            "Drag a PDF onto it to report a problem, or double-click it for a general report.",
             "You can still run `tnotes feedback` directly.",
-            err=True,
-        )
+        ),
+    ]
+
+    any_failed = False
+    for name, create, path, hint, fallback in droplets:
+        if create():
+            typer.echo(f"Created the {name} droplet at {path}.")
+            typer.echo(f"  {hint}")
+        else:
+            any_failed = True
+            typer.echo(
+                f"Couldn't create the {name} droplet (osacompile failed). {fallback}",
+                err=True,
+            )
+
+    if any_failed:
         raise typer.Exit(1)
+
+    typer.echo(
+        "The first time you use a droplet, macOS will ask you to allow it to control "
+        "Terminal — that's a one-time consent."
+    )
 
 
 @app.command()
