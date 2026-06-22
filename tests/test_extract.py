@@ -194,6 +194,49 @@ def test_run_extract_carries_detected_language_and_stays_valid():
     assert not validate_structure(notes)
 
 
+def test_anchor_gate_carries_excerpt_translation_through_rebuild():
+    """#116 / ADR-008: the reading-aid gloss rides along on the kept evidence record
+    through the gate's rebuild, like the other additive evidence fields."""
+    page = PageText(page_index=0, page_number=1, text="alpha beta gamma", width=1.0, height=1.0)
+    notes = {
+        "schema_version": 1, "source": {"document": "d", "page_index": 0}, "terms": [],
+        "evidence": [{"id": "e-1", "excerpt": "alpha beta", "source": "body",
+                      "excerpt_translation": "alfa beta (gloss)"}],
+        "statements": [{"id": "s-1", "type": "claim", "text": "x", "evidence": ["e-1"]}],
+        "relations": [],
+    }
+    cleaned, dropped = anchor_gate(notes, page)
+    assert dropped == []
+    assert cleaned["evidence"][0]["excerpt_translation"] == "alfa beta (gloss)"
+
+
+def test_anchor_gate_ignores_excerpt_translation_for_anchoring():
+    """HARD INVARIANT (ADR-008): the anchor resolves against `excerpt` ONLY. A gloss
+    that does NOT appear on the page must not stop a valid quote from anchoring, and a
+    gloss can never rescue a quote whose `excerpt` is absent."""
+    page = PageText(page_index=0, page_number=1, text="alpha beta gamma", width=1.0, height=1.0)
+    notes = {
+        "schema_version": 1, "source": {"document": "d", "page_index": 0}, "terms": [],
+        "evidence": [
+            # valid excerpt; gloss text is nowhere on the page → still anchors on excerpt.
+            {"id": "e-ok", "excerpt": "alpha beta", "source": "body",
+             "excerpt_translation": "this gloss text is not on the page at all"},
+            # absent excerpt; gloss text IS on the page → must NOT anchor (gloss is not evidence).
+            {"id": "e-bad", "excerpt": "not on page", "source": "body",
+             "excerpt_translation": "alpha beta gamma"},
+        ],
+        "statements": [
+            {"id": "s-ok", "type": "claim", "text": "x", "evidence": ["e-ok"]},
+            {"id": "s-bad", "type": "claim", "text": "y", "evidence": ["e-bad"]},
+        ],
+        "relations": [],
+    }
+    cleaned, dropped = anchor_gate(notes, page)
+    kept = {e["id"] for e in cleaned["evidence"]}
+    assert kept == {"e-ok"}                                            # gloss neither helped nor hurt
+    assert {d["id"] for d in dropped if d["kind"] == "evidence"} == {"e-bad"}
+
+
 def test_note_without_detected_language_still_validates():
     """Backward compat: a note lacking detected_language (pre-#115) is schema-valid."""
     notes, _ = run_extract(_synthetic_page(), _StubExtractor(_synthetic_notes()), document="d")

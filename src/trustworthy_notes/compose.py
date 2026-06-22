@@ -452,7 +452,10 @@ def _assemble_chapter(ch: dict, notes: dict, *, merges, xrels, links, term_label
                         "page_index": idx}
                 if page_label is not None:
                     item["page_label"] = page_label
-                for opt in ("locator", "script", "caption"):
+                # excerpt_translation is the reading-aid gloss (ADR-008): additive,
+                # carried verbatim like the other optional fields. It is NOT anchor
+                # checked — `excerpt` above stays the sole anchored evidence.
+                for opt in ("locator", "script", "caption", "excerpt_translation"):
                     if opt in rec:
                         item[opt] = rec[opt]
                 out_ev.append(item)
