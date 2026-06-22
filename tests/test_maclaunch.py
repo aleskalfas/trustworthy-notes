@@ -1,12 +1,14 @@
-"""Tests for the macOS-only "Send Feedback" droplet mechanics (issue #69).
+"""Tests for the macOS-only droplet mechanics (issues #69, #102).
 
 The real trigger — a Finder drag onto a compiled droplet that opens Terminal — can't
 be exercised on Linux/CI, and we never run the real `osacompile` against the real
 Desktop here, so these stub the platform check, the path resolver, and `subprocess` to
-drive every branch. The droplet primitive's `osacompile` invocation, its baked
-absolute path + `feedback` subcommand, its safe quoting of a dropped path, and its
-off-macOS no-op are all asserted with `subprocess` mocked. First real validation of the
-live droplet is a macOS run (mirroring how `winlaunch`'s `.lnk` is validated on Windows).
+drive every branch. Both droplets — "Send Feedback" (`tnotes feedback <pdf>`) and
+"Make Notes" (the bare `tnotes <pdf>` book flow) — share one builder, so we assert each
+one's `osacompile` invocation, its baked absolute path and (for feedback) `feedback`
+subcommand, its safe quoting of a dropped path, and its off-macOS no-op with
+`subprocess` mocked. First real validation of the live droplet is a macOS run (mirroring
+how `winlaunch`'s `.lnk` is validated on Windows).
 """
 
 from __future__ import annotations
@@ -132,6 +134,90 @@ def test_droplet_returns_false_when_osacompile_missing(monkeypatch):
 
     monkeypatch.setattr(maclaunch.subprocess, "run", fake_run)
     assert maclaunch.create_feedback_droplet() is False
+
+
+# --- create_make_notes_droplet: book flow, no `feedback` token (issue #102) --------
+
+
+def test_make_notes_droplet_is_a_noop_off_macos(monkeypatch):
+    monkeypatch.setattr(maclaunch.platform, "system", lambda: "Windows")
+
+    def must_not_shell_out(*_a, **_k):
+        raise AssertionError("must not shell out off macOS")
+
+    monkeypatch.setattr(maclaunch.subprocess, "run", must_not_shell_out)
+    assert maclaunch.create_make_notes_droplet() is False
+
+
+def test_make_notes_droplet_compiles_bare_tnotes_with_no_feedback_token(monkeypatch):
+    monkeypatch.setattr(maclaunch.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        maclaunch, "_resolve_tnotes_path", lambda _arg: "/Users/me/.local/bin/tnotes"
+    )
+
+    captured = {}
+
+    def fake_run(argv, **_k):
+        captured["argv"] = argv
+        captured["source"] = _read_script_from_argv(argv)
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(maclaunch.subprocess, "run", fake_run)
+
+    assert maclaunch.create_make_notes_droplet() is True
+    argv = captured["argv"]
+    # osacompile -o "<Desktop>/Make Notes.app" <script>
+    assert argv[0] == "osacompile"
+    assert "-o" in argv
+    out_path = argv[argv.index("-o") + 1]
+    assert out_path.endswith("Desktop/Make Notes.app")
+
+    source = captured["source"]
+    # The absolute tnotes path is baked in and both handlers are present, but this is
+    # the bare book flow — there is NO `feedback` subcommand anywhere in the script.
+    assert "/Users/me/.local/bin/tnotes" in source
+    assert "feedback" not in source
+    assert "on open theFiles" in source
+    assert "on run" in source
+    assert 'tell application "Terminal"' in source
+
+
+def test_make_notes_droplet_passes_the_dropped_file_as_the_argument(monkeypatch):
+    """The dropped PDF is the bare positional arg, shell-quoted by AppleScript itself."""
+    monkeypatch.setattr(maclaunch.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(maclaunch, "_resolve_tnotes_path", lambda _arg: "/abs/tnotes")
+
+    captured = {}
+
+    def fake_run(argv, **_k):
+        captured["source"] = _read_script_from_argv(argv)
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(maclaunch.subprocess, "run", fake_run)
+    assert maclaunch.create_make_notes_droplet() is True
+    assert "quoted form of POSIX path of f" in captured["source"]
+
+
+def test_make_notes_droplet_returns_false_when_osacompile_fails(monkeypatch):
+    monkeypatch.setattr(maclaunch.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(maclaunch, "_resolve_tnotes_path", lambda _arg: "/abs/tnotes")
+
+    def fake_run(argv, **_k):
+        return subprocess.CompletedProcess(argv, 1, b"", b"boom")
+
+    monkeypatch.setattr(maclaunch.subprocess, "run", fake_run)
+    assert maclaunch.create_make_notes_droplet() is False
+
+
+def test_make_notes_droplet_returns_false_when_osacompile_missing(monkeypatch):
+    monkeypatch.setattr(maclaunch.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(maclaunch, "_resolve_tnotes_path", lambda _arg: "/abs/tnotes")
+
+    def fake_run(*_a, **_k):
+        raise OSError("osacompile not found")
+
+    monkeypatch.setattr(maclaunch.subprocess, "run", fake_run)
+    assert maclaunch.create_make_notes_droplet() is False
 
 
 # --- path resolution: arg > which > argv[0], always absolute -----------------------

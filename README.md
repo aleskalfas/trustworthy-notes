@@ -111,11 +111,13 @@ confirm it works:
 tnotes --help
 ```
 
-On macOS, the bootstrap also drops a **"Send Feedback" droplet on your Desktop**.
-Drag a PDF onto it to report a problem with that document (or double-click it for a
-general report) — no terminal needed. If you ever move or reinstall `tnotes`, re-run
-`tnotes install-droplet` to refresh it. The first time you use the droplet, macOS
-asks you to allow it to control Terminal; that's a one-time consent.
+On macOS, the bootstrap also drops two icons on your Desktop: a **"Make Notes"**
+droplet and a **"Send Feedback"** droplet. Drag a PDF onto **Make Notes** to turn it
+into a book; drag one onto **Send Feedback** to report a problem with that document (or
+double-click it for a general report) — no terminal needed. If you ever move or
+reinstall `tnotes`, re-run `tnotes install-droplet` to refresh both. The first time you
+use a droplet, macOS asks you to allow it to control Terminal; that's a one-time
+consent.
 
 (The "Quick start" and "Platform" sections further down have the finer details —
 the cross-platform core, the Windows source path, and alternatives.)
