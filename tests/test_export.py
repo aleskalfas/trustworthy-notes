@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 from trustworthy_notes.export import study_document
@@ -152,9 +153,13 @@ def test_unusual_language_soft_warns_but_still_runs():
 
 
 def test_plausible_language_does_not_warn():
+    # A well-formed language never triggers the unusual-language soft warning. (The
+    # degenerate _FakeClient returns no JSON for the translation passes, so a
+    # translation-incompleteness warning is expected here; we assert only on the
+    # language-plausibility warning this test is about.)
     warnings: list[str] = []
     _user_prompt_for("ja", warn=warnings.append)
-    assert warnings == []
+    assert not any("unusual" in w for w in warnings)
 
 
 class _ScriptedClient:
@@ -351,6 +356,151 @@ def test_gloss_echoing_source_is_dropped():
         model="m", language="cs",
     )["markdown"]
     assert "_translation:" not in md
+
+
+def _cset_n_cited(n: int) -> dict:
+    """A cset whose synthesis cites ``n`` statements, each with its own evidence — so the
+    gloss and appendix passes both see ``n`` cited entries (used to cross the batch size)."""
+    evidence = [
+        {"id": f"e-{i}", "excerpt": f"verbatim source quote number {i}", "source": "body",
+         "page_index": i, "page_label": str(i)}
+        for i in range(1, n + 1)
+    ]
+    statements = [
+        {"id": f"s-{i}", "type": "claim", "text": f"summary {i}", "evidence": [f"e-{i}"]}
+        for i in range(1, n + 1)
+    ]
+    return {
+        "source": {"chapter_id": "BIG", "chapter_title": "BIG"},
+        "terms": [], "evidence": evidence, "statements": statements, "relations": [],
+    }
+
+
+def _synth_citing(n: int) -> str:
+    return "## S\n" + "\n".join(f"- point [s-{i}]" for i in range(1, n + 1))
+
+
+class _BatchAwareClient:
+    """A fake client whose FIRST stream() call returns the synthesis body, and every
+    subsequent call (the batched gloss / appendix passes) returns a JSON object echoing
+    back, for each requested id, a deterministic ``<lang> <id>`` translation. This lets a
+    test feed a cited set larger than the batch size and assert every id came back AND
+    that the translation passes were split across multiple calls."""
+
+    def __init__(self, synth: str, *, fail_calls: set[int] | None = None, partial: bool = False):
+        self.calls: list[dict] = []
+        self._synth = synth
+        self._fail_calls = fail_calls or set()
+        self._partial = partial
+        outer = self
+
+        class _Stream:
+            def __init__(s, text):
+                s._text = text
+
+            def __enter__(s):
+                return s
+
+            def __exit__(s, *e):
+                return False
+
+            def get_final_message(s):
+                return SimpleNamespace(
+                    content=[SimpleNamespace(type="text", text=s._text)], stop_reason="end_turn"
+                )
+
+        def _stream(**kw):
+            idx = len(outer.calls)
+            outer.calls.append(kw)
+            if idx == 0:
+                return _Stream(outer._synth)            # synthesis call
+            if idx in outer._fail_calls:
+                raise RuntimeError("simulated batch failure")
+            # echo a deterministic translation for each id in this batch's payload (the
+            # instruction embeds the id -> source-text json object as its tail)
+            content = kw["messages"][0]["content"]
+            payload = json.loads(re.search(r"\{.*\}", content, re.S).group(0))
+            mapping = {k: f"TR {k}" for k in payload}
+            if outer._partial:                          # drop most keys → truncation signature
+                keep = sorted(mapping)[: max(0, len(mapping) // 4)]
+                mapping = {k: mapping[k] for k in keep}
+            return _Stream(json.dumps(mapping))
+
+        self.messages = SimpleNamespace(stream=_stream)
+
+
+def test_large_cited_set_translates_every_entry_across_multiple_batches():
+    # #132: a cited set larger than the batch size must translate IN FULL, split across
+    # one model call per batch — not one oversized call that truncates to all-source.
+    from trustworthy_notes.export import _TRANSLATE_BATCH_SIZE
+
+    n = _TRANSLATE_BATCH_SIZE * 2 + 5            # spans three gloss batches and three appendix
+    cset = _cset_n_cited(n)
+    client = _BatchAwareClient(_synth_citing(n))
+    warnings: list[str] = []
+    md = study_document(cset, client=client, model="m", language="cs", warn=warnings.append)["markdown"]
+
+    # every cited excerpt got a gloss line (no source-language fallback)
+    for i in range(1, n + 1):
+        assert f"_translation: TR e-{i}_" in md, i
+    # and every cited summary rendered translated
+    for i in range(1, n + 1):
+        assert f"— TR s-{i}" in md, i
+
+    # the gloss pass alone needed more than one call (so did the appendix); a single
+    # oversized call is exactly the #132 bug. Calls = 1 synthesis + ceil(n/bs) gloss
+    # + ceil((n+labels)/bs) appendix, all > 3.
+    assert len(client.calls) > 3
+    gloss_calls = [c for c in client.calls[1:] if "QUOTES" in c["messages"][0]["content"]]
+    assert len(gloss_calls) >= 3                  # one per gloss batch
+    assert warnings == []                         # full translation → no incompleteness warning
+
+
+def test_failed_batch_warns_and_falls_back_without_blocking_the_rest():
+    # #132: if a batch call raises, warn (not silent), fall its ids back to source, and
+    # still translate the other batches — never crash, never an all-source appendix.
+    from trustworthy_notes.export import _TRANSLATE_BATCH_SIZE
+
+    n = _TRANSLATE_BATCH_SIZE * 2               # two gloss batches, two appendix batches
+    cset = _cset_n_cited(n)
+    # fail the SECOND gloss batch only (call index 2: 0=synth, 1=gloss#1, 2=gloss#2)
+    client = _BatchAwareClient(_synth_citing(n), fail_calls={2})
+    warnings: list[str] = []
+    md = study_document(cset, client=client, model="m", language="cs", warn=warnings.append)["markdown"]
+
+    assert any("translation incomplete" in w for w in warnings)   # surfaced, not silent
+    # first-batch ids translated; the failed batch's ids fell back to the verbatim quote
+    assert "_translation: TR e-1_" in md
+    assert f"verbatim source quote number {n}" in md              # last id's original quote shows
+    assert "_translation: TR e-" + str(n) + "_" not in md        # but no gloss for the failed id
+    assert md                                                     # produced a document (no crash)
+
+
+def test_partial_batch_marked_incomplete_warns():
+    # #132: a batch that returns markedly fewer keys than asked (the truncation
+    # signature) is surfaced via warn, even though the call did not raise.
+    n = 8
+    cset = _cset_n_cited(n)
+    client = _BatchAwareClient(_synth_citing(n), partial=True)
+    warnings: list[str] = []
+    study_document(cset, client=client, model="m", language="cs", warn=warnings.append)
+    assert any("translation incomplete" in w for w in warnings)
+
+
+def test_small_set_uses_a_single_batch():
+    # below the batch size: one gloss call + one appendix call (unchanged behaviour).
+    from trustworthy_notes.export import _TRANSLATE_BATCH_SIZE
+
+    n = 3
+    assert n < _TRANSLATE_BATCH_SIZE
+    cset = _cset_n_cited(n)
+    client = _BatchAwareClient(_synth_citing(n))
+    study_document(cset, client=client, model="m", language="cs")
+    gloss_calls = [c for c in client.calls[1:] if "QUOTES" in c["messages"][0]["content"]]
+    appendix_calls = [c for c in client.calls[1:] if "label:" in c["messages"][0]["content"]]
+    assert len(gloss_calls) == 1                  # single gloss batch
+    assert len(appendix_calls) == 1               # single appendix batch
+    assert len(client.calls) == 3                 # synthesis + one gloss + one appendix
 
 
 def test_strip_citations_removes_inline_cites_and_appendix():

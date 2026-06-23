@@ -77,24 +77,31 @@ _GLOSS_SYSTEM = (
 )
 
 
-def _translate_map(
-    items: dict[str, str], language: str, *, system: str, instruction: str,
-    client: "anthropic.Anthropic", model: str, effort: str = "low", max_tokens: int = 2000,
-) -> dict[str, str]:
-    """Translate a small id -> source-text map into ``language`` in one model pass.
+# Per-call cap on how many id -> text entries one translation request carries (#132).
+# A single call over the WHOLE cited set (≈90 entries on a large chapter) made the model
+# truncate / return partial-or-unparseable JSON, and the per-key source-fallback then
+# rendered the entire appendix in the source language with no warning. Keeping each call
+# small enough to return one complete valid JSON object is the fix; ~25 leaves generous
+# token headroom for both the gloss (verbatim quotes) and the appendix (summaries) passes.
+_TRANSLATE_BATCH_SIZE = 25
 
-    The shared core behind both reading-layer translation passes (ADR-008): the
-    excerpt gloss and the Notes & Sources appendix text. ``items`` maps an id to the
-    source string to translate; ``system``/``instruction`` are the caller's prompt.
-    Returns id -> translation for the ids the model returned, keeping only ids we
-    asked about with a non-blank translation that actually DIFFERS from the original
-    (a model echoing the source back adds no value); omitted/blank ids are simply
-    skipped, never an error. This never re-reads the source page and its output never
-    enters a §7 check. The model seam is the same injectable ``client``/``model`` the
-    synthesis uses, so it is testable without a network call.
-    """
-    if not items:
-        return {}
+# A batch is "markedly incomplete" — the truncation / partial-parse signature this fix
+# targets (#132) — when it keeps fewer than this fraction of the entries it asked about.
+# A model may legitimately echo or skip a handful of keys (those fall back quietly), so we
+# do NOT warn on a small shortfall; only a near-total loss (a truncated or unparseable
+# response) crosses the bar. Tuned below the rate scattered legitimate echoes produce.
+_TRANSLATE_MIN_KEPT_FRACTION = 0.5
+
+
+def _translate_batch(
+    items: dict[str, str], *, system: str, instruction: str,
+    client: "anthropic.Anthropic", model: str, effort: str, max_tokens: int,
+) -> dict[str, str]:
+    """One model call translating ``items`` (already a single batch). Returns the kept
+    id -> translation map for this batch — ids we asked about whose translation is
+    non-blank and actually DIFFERS from the source (an echo adds no value). May raise if
+    the call itself fails; the caller decides how to surface that. A blank/unparseable
+    body is not an error here — it just yields {} (the per-key fallback then applies)."""
     output_config: dict = {}
     if effort:
         output_config["effort"] = effort
@@ -116,9 +123,71 @@ def _translate_map(
     }
 
 
+def _translate_map(
+    items: dict[str, str], language: str, *,
+    system: str, build_instruction: Callable[[dict[str, str]], str],
+    client: "anthropic.Anthropic", model: str, effort: str = "low", max_tokens: int = 2000,
+    warn: Optional[Callable[[str], None]] = None,
+) -> dict[str, str]:
+    """Translate an id -> source-text map into ``language`` across BOUNDED batches (#132).
+
+    The shared core behind both reading-layer translation passes (ADR-008): the excerpt
+    gloss and the Notes & Sources appendix text. ``items`` maps an id to the source
+    string to translate; ``system`` is the caller's system prompt and
+    ``build_instruction`` renders the user prompt for one batch of items (the payload
+    differs per batch, so the caller supplies a builder rather than a fixed string).
+
+    ``items`` is split into chunks of at most ``_TRANSLATE_BATCH_SIZE`` and each chunk is
+    one model call; the returned maps are merged, preserving keys. Keeping each call small
+    avoids the truncated / partial JSON that an oversized single call produced, which used
+    to silently fall the whole appendix back to the source language (#132).
+
+    A batch that RAISES, or returns MARKEDLY fewer keys than it was asked about (below
+    ``_TRANSLATE_MIN_KEPT_FRACTION`` — the truncation / partial-parse signature), is
+    surfaced via ``warn`` (one line). The missing ids still fall back to the original at
+    render time (never a crash, never blocking), but no longer silently. A small shortfall
+    — a model legitimately echoing or skipping a handful of keys — is expected and does NOT
+    warn. Kept entries are those with a non-blank translation that DIFFERS from the source
+    (an echo adds no value).
+
+    This never re-reads the source page and its output never enters a §7 check. The model
+    seam is the same injectable ``client``/``model`` the synthesis uses, so it is testable
+    without a network call.
+    """
+    if not items:
+        return {}
+    keys = list(items)
+    merged: dict[str, str] = {}
+    for start in range(0, len(keys), _TRANSLATE_BATCH_SIZE):
+        batch = {k: items[k] for k in keys[start:start + _TRANSLATE_BATCH_SIZE]}
+        try:
+            result = _translate_batch(
+                batch, system=system, instruction=build_instruction(batch),
+                client=client, model=model, effort=effort, max_tokens=max_tokens,
+            )
+        except Exception as exc:  # a failed batch must not block the whole document
+            if warn:
+                warn(
+                    f"translation incomplete: {len(batch)} of {len(batch)} entries in a "
+                    f"batch kept their original language ({type(exc).__name__}: {exc})"
+                )
+            continue
+        merged.update(result)
+        kept = sum(1 for k in batch if k in result)
+        # A near-total loss for a batch is the #132 signature (truncated/partial JSON);
+        # the few missing ids of a normal batch fall back quietly without a warning.
+        if kept < len(batch) * _TRANSLATE_MIN_KEPT_FRACTION and warn:
+            warn(
+                f"translation incomplete: {len(batch) - kept} of {len(batch)} entries in a "
+                f"batch kept their original language (source-language fallback)"
+            )
+    return merged
+
+
 def _translate_excerpts(
     excerpts: dict[str, str], language: str, *,
     client: "anthropic.Anthropic", model: str, effort: str = "low", max_tokens: int = 2000,
+    warn: Optional[Callable[[str], None]] = None,
 ) -> dict[str, str]:
     """Translate cited source excerpts into ``language`` for the reading-aid gloss.
 
@@ -126,20 +195,23 @@ def _translate_excerpts(
     (cost-bounded: a study document surfaces a small subset of all extracted evidence,
     and ADR-008 produces the gloss for those alone). Returns evidence-id -> translation;
     ids the model omits or returns blank are simply skipped (the appendix then renders
-    the original quote with no gloss line — never an error).
+    the original quote with no gloss line — never an error). Batches via the shared
+    ``_translate_map`` so a large cited set still translates in full (#132).
 
     This is a SEPARATE pass over the original quotes; it never mutates ``excerpt`` and
     its output never enters a §7 check.
     """
-    payload = json.dumps(excerpts, ensure_ascii=False)
-    instruction = (
-        f"Translate each quotation below into {language}. Keep the SAME json keys (the "
-        f"ids); the value of each is the {language} translation of that quotation. "
-        f"Return ONLY the json object.\n\nQUOTES (json id -> source text):\n{payload}"
-    )
+    def build_instruction(batch: dict[str, str]) -> str:
+        payload = json.dumps(batch, ensure_ascii=False)
+        return (
+            f"Translate each quotation below into {language}. Keep the SAME json keys (the "
+            f"ids); the value of each is the {language} translation of that quotation. "
+            f"Return ONLY the json object.\n\nQUOTES (json id -> source text):\n{payload}"
+        )
+
     return _translate_map(
-        excerpts, language, system=_GLOSS_SYSTEM, instruction=instruction,
-        client=client, model=model, effort=effort, max_tokens=max_tokens,
+        excerpts, language, system=_GLOSS_SYSTEM, build_instruction=build_instruction,
+        client=client, model=model, effort=effort, max_tokens=max_tokens, warn=warn,
     )
 
 
@@ -170,6 +242,7 @@ _LABEL_PREFIX = "label:"
 def _translate_appendix(
     summaries: dict[str, str], labels: set[str], language: str, *,
     client: "anthropic.Anthropic", model: str, effort: str = "low", max_tokens: int = 2000,
+    warn: Optional[Callable[[str], None]] = None,
 ) -> dict[str, str]:
     """Translate the cited appendix text — statement summaries + chrome labels — in one pass.
 
@@ -181,19 +254,23 @@ def _translate_appendix(
     label); a missing key falls back to the original at render time — never an error.
 
     A SEPARATE reading-layer pass; it never re-reads the source and its output never enters
-    a §7 check. The verbatim excerpt is not in ``items`` and is never touched (ADR-008)."""
+    a §7 check. The verbatim excerpt is not in ``items`` and is never touched (ADR-008).
+    Batches via the shared ``_translate_map`` so a large cited set still translates (#132)."""
     items = dict(summaries)
     for word in labels:
         items[f"{_LABEL_PREFIX}{word}"] = word
-    instruction = (
-        f"Translate each value below into {language}. Keep the SAME json keys; the value of "
-        f"each is its {language} translation. Keys starting with `label:` are short fixed UI "
-        f"words — translate just the word. Return ONLY the json object.\n\n"
-        f"TEXT (json id -> source text):\n{json.dumps(items, ensure_ascii=False)}"
-    )
+
+    def build_instruction(batch: dict[str, str]) -> str:
+        return (
+            f"Translate each value below into {language}. Keep the SAME json keys; the value of "
+            f"each is its {language} translation. Keys starting with `label:` are short fixed UI "
+            f"words — translate just the word. Return ONLY the json object.\n\n"
+            f"TEXT (json id -> source text):\n{json.dumps(batch, ensure_ascii=False)}"
+        )
+
     return _translate_map(
-        items, language, system=_APPENDIX_SYSTEM, instruction=instruction,
-        client=client, model=model, effort=effort, max_tokens=max_tokens,
+        items, language, system=_APPENDIX_SYSTEM, build_instruction=build_instruction,
+        client=client, model=model, effort=effort, max_tokens=max_tokens, warn=warn,
     )
 
 
@@ -433,7 +510,7 @@ def study_document(
         }
         if cited_excerpts:
             gloss = _translate_excerpts(
-                cited_excerpts, language, client=client, model=model, effort=effort
+                cited_excerpts, language, client=client, model=model, effort=effort, warn=warn
             )
 
         # Cited statement summaries + the chrome labels they actually use (basis kinds,
@@ -451,7 +528,7 @@ def study_document(
                     labels.add(e.get("source", "body"))
         if summaries or labels:
             appendix_tr = _translate_appendix(
-                summaries, labels, language, client=client, model=model, effort=effort
+                summaries, labels, language, client=client, model=model, effort=effort, warn=warn
             )
 
     # drop a model-supplied H1 title; we render our own + meta + TOC
