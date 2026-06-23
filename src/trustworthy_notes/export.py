@@ -315,10 +315,10 @@ _APPENDIX_SYSTEM = (
 
 # Sentinel ids for the fixed chrome labels, sent in the SAME appendix-translation call as
 # the statement summaries. The `label:` prefix can't collide with a statement id (`s-…`),
-# so one returned JSON map carries both. The page-label token is the reader-visible `p.`
-# abbreviation (sent and rendered as one unit, so English stays exactly `p.<page>`); a
-# target language translates the abbreviation in place (e.g. `s.` in German).
-_PAGE_WORD = "p."
+# so one returned JSON map carries both. The page-label token is the reader-visible page
+# word, spelled out and rendered space-separated from the number (English `page <page>`);
+# a target language translates the word in place (e.g. `strana` in Czech).
+_PAGE_WORD = "page"
 _LABEL_PREFIX = "label:"
 
 
@@ -524,14 +524,18 @@ def _notes_appendix(
             # prefix EVERY line of the (possibly multi-line) excerpt so it stays one
             # blockquote (#148); keep the trailing 2-space hard break so the citation
             # line below stays in the same block.
-            out.append(f"{_blockquote(q)}  \n> — {page_word}{page}{loc} ({source_kind})")
+            out.append(f"{_blockquote(q)}  \n> — {page_word} {page}{loc} ({source_kind})")
             tr = gloss.get(eid) or e.get("excerpt_translation")
             if tr:
                 tr = tr if len(tr) <= 240 else tr[:237] + "…"
-                # reading aid, BENEATH the quote, visually distinct (italic) and labelled —
+                # reading aid, BENEATH the quote: a blank quoted line separates it into a
+                # visually distinct block inside the same blockquote, then the translated
+                # text in italic with NO label (it's self-evidently the translation, and a
+                # hardcoded "translation:" word would be wrong on a localized document) —
                 # never a replacement for the verbatim evidence above (ADR-008).
                 # per-line prefix defensively in case a gloss ever carries a newline (#148).
-                out.append(_blockquote(f"_translation: {tr}_"))
+                out.append(">")
+                out.append(_blockquote(f"_{tr}_"))
     return "\n".join(out)
 
 
