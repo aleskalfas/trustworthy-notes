@@ -321,15 +321,23 @@ language — that is the provenance guarantee, and translating the reading prose
 weakens it (the quotes are still the source's own words; see
 `docs/architecture/decisions/ADR-008-translation-trust-boundary.md`).
 
+The *Notes & Sources* appendix reads in your language too. Each entry's note summary
+and its small labels (the kind of note — claim, reported, definition — the source kind
+— body, footnote — and the *p.* page marker) render in your preferred language, so the
+whole cited copy reads as one document rather than switching languages at the appendix.
+Only the **verbatim source quote stays in its original language**: it is the anchored
+evidence, the one thing the source-checks ever read, and it is never translated in
+place.
+
 When you read in a language other than the source's, the cited copy also shows a small
-*translation:* line **beneath each source quote** in *Notes & Sources* — a reading aid
-so you can follow what the quote says without losing sight of the original. The
-translation sits *next to* the verbatim quote, never in place of it: the quote above it
-is still the source's own words and is the only thing the anchor checks ever read. The
-gloss is produced only for the quotes a study document actually cites (not every
+*translation:* line **beneath each source quote** — a reading aid so you can follow what
+the quote says without losing sight of the original. The translation sits *next to* the
+verbatim quote, never in place of it: the quote above it is still the source's own words.
+The gloss is produced only for the quotes a study document actually cites (not every
 extracted excerpt), and only when you're reading in a non-source language — an
-English/native run shows no translation line. The clean prose reading copy carries no
-excerpts at all, so it shows no glosses either.
+English/native run shows no translation line and the appendix reads exactly as before.
+The clean prose reading copy carries no appendix at all, so it shows neither labels nor
+glosses there.
 
 The preferred language resolves in layers, most specific first:
 
@@ -342,6 +350,7 @@ tnotes config set-language cs   # set your default reading language (a short cod
 tnotes config show              # show the resolved language and where it comes from
 tnotes INPUT.pdf --language ja  # write the study notes in Japanese for a single run
 tnotes export INPUT.pdf -l ja   # the same on the per-stage export command
+tnotes book INPUT.pdf -l ja     # combine the Japanese chapters into the book (matches the export language)
 ```
 
 Any language is accepted — there is no fixed supported list, so anything the model

@@ -1053,40 +1053,67 @@ def book(
         help="Strip [s-N] citations and the Notes & Sources appendix for a clean reading copy "
              "(writes <stem>.tnotes.reading.md/.pdf). Default keeps citations (<stem>.tnotes.md/.pdf).",
     ),
+    language: str = typer.Option(
+        None, "--language", "-l",
+        help="Which language's exported chapters to combine, as a short code (e.g. en, cs, "
+        "ja). Resolves: this flag > `language:` in config > built-in (en). Must match the "
+        "language you exported with — a `cs` book is built from the .cs.md chapters.",
+    ),
 ):
     """Combine the per-chapter exports into one navigable book beside the source PDF.
 
-    Concatenates 4-export/chapter-*.<style>.md into a single document with a master
+    Concatenates the per-chapter study documents into a single document with a master
     hierarchical Contents and namespaced cross-chapter links, and renders one
     interactive PDF. The book is written beside the source as <stem>.tnotes.md and
     <stem>.tnotes.pdf (e.g. data/Foo.pdf → data/Foo.tnotes.pdf). Chapter titles come
     from the composed notes-sets. Prose chapters only by default (--all to include
     reference sections). With --no-citations, also drops the [s-N] markers and Notes
     & Sources for a clean read-through (<stem>.tnotes.reading.*), leaving the cited
-    <stem>.tnotes.* as the authority. Run `tnotes export --pdf` first. No API calls.
+    <stem>.tnotes.* as the authority.
+
+    `--language` selects which exported chapters to combine: the English/native book
+    is built from chapter-NNN.<style>.md, a `--language cs` book from the .cs.md
+    chapters — so a translated book never mixes in English chapters (#127). Run
+    `tnotes export --language <lang> --pdf` first. No API calls.
     """
     import yaml as _yaml
 
     from . import book as bookmod, compose, export as exp, pdf as pdfmod
 
+    language = config.resolve_language(language)
     notes_dir = workspace.work_dir(input, notes_dir)
-    exdir = workspace.export_dir(notes_dir)
-    files = sorted(exdir.glob(f"chapter-*.{style}.md"))
-    if not files:
-        typer.echo(f"no chapter-*.{style}.md in {exdir} — run `tnotes export` first.", err=True)
-        raise typer.Exit(1)
 
+    # Drive selection off the composed chapter notes-sets (the authoritative chapter
+    # list) and resolve each to its language-aware export path — the same path `export`
+    # wrote — so a `cs` book is built from .cs.md files and never mixes in English ones
+    # (a bare chapter-*.<style>.md glob would match both languages) (#127).
+    notes_files = sorted(
+        workspace.compose_stage_dir(notes_dir, "chapters").glob("chapter-*.notes.yaml")
+    )
     chapters: list[tuple[int, str, str]] = []
     skipped = 0
-    for f in files:
-        num = int(f.stem.split("-")[1].split(".")[0])
-        cfile = workspace.compose_stage_dir(notes_dir, "chapters") / f"chapter-{num:03d}.notes.yaml"
-        src = (_yaml.safe_load(cfile.read_text(encoding="utf-8")) or {}).get("source", {}) if cfile.is_file() else {}
+    missing = 0
+    for cfile in notes_files:
+        num = int(cfile.stem.split("-")[1].split(".")[0])
+        f = workspace.chapter_export_path(notes_dir, num, style, language)
+        src = (_yaml.safe_load(cfile.read_text(encoding="utf-8")) or {}).get("source", {})
         title = src.get("chapter_title") or src.get("chapter_id") or f"Chapter {num}"
         if prose_only and not compose._is_prose_section(title):
             skipped += 1
             continue
+        if not f.is_file():
+            missing += 1  # not exported for this language — skip, don't mix another language in
+            continue
         chapters.append((num, title, f.read_text(encoding="utf-8")))
+
+    if not chapters:
+        exdir = workspace.export_dir(notes_dir)
+        typer.echo(
+            f"no exported chapters for language {language!r} in {exdir} — run "
+            f"`tnotes export --language {language}` first.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     if no_citations:
         chapters = [(num, title, exp.strip_citations(md)) for num, title, md in chapters]
@@ -1102,6 +1129,7 @@ def book(
     typer.echo(f"combined {len(chapters)} chapters"
                + (" (no citations — reading copy)" if no_citations else "")
                + (f" (skipped {skipped} reference sections; --all to include)" if skipped else "")
+               + (f" ({missing} not yet exported for {language!r})" if missing else "")
                + f" → {md_path} and {pdf_path.name}")
 
 
@@ -1185,7 +1213,11 @@ def export(
             if not compose._is_prose_section(src.get("chapter_title") or src.get("chapter_id") or ""):
                 skipped += 1
                 continue
-        dest = out_dir / f"chapter-{num:03d}.{style}.md"
+        # Language-aware cache identity (#127): a `--language cs` run writes/reads the
+        # .cs.md file, never colliding with the English chapter-NNN.<style>.md. This is
+        # the same path the orchestrator's _export builds, so standalone and one-command
+        # runs agree on which file a given language reads and writes.
+        dest = workspace.chapter_export_path(notes_dir, num, style, language)
         pdf_dest = dest.with_suffix(".pdf")
         need_md = force or not dest.is_file()
         need_pdf = pdf and (force or not pdf_dest.is_file())
