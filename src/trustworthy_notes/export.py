@@ -524,18 +524,20 @@ def _notes_appendix(
             # prefix EVERY line of the (possibly multi-line) excerpt so it stays one
             # blockquote (#148); keep the trailing 2-space hard break so the citation
             # line below stays in the same block.
-            out.append(f"{_blockquote(q)}  \n> — {page_word} {page}{loc} ({source_kind})")
+            block = f"{_blockquote(q)}  \n> — {page_word} {page}{loc} ({source_kind})"
             tr = gloss.get(eid) or e.get("excerpt_translation")
             if tr:
                 tr = tr if len(tr) <= 240 else tr[:237] + "…"
-                # reading aid, BENEATH the quote: a blank quoted line separates it into a
-                # visually distinct block inside the same blockquote, then the translated
-                # text in italic with NO label (it's self-evidently the translation, and a
-                # hardcoded "translation:" word would be wrong on a localized document) —
-                # never a replacement for the verbatim evidence above (ADR-008).
-                # per-line prefix defensively in case a gloss ever carries a newline (#148).
-                out.append(">")
-                out.append(_blockquote(f"_{tr}_"))
+                # reading aid, BENEATH the quote on its own line in the SAME blockquote: a
+                # Markdown hard break (trailing two spaces) after the citation line, then the
+                # translated text in italic with NO label (it's self-evidently the translation,
+                # and a hardcoded "translation:" word would be wrong on a localized document) —
+                # never a replacement for the verbatim evidence above (ADR-008). NOT a bare `>`
+                # separator line: in the reader's renderer that shows as a literal `>` and
+                # splits the one blockquote into two boxes (#152). per-line prefix defensively
+                # in case a gloss ever carries a newline (#148).
+                block += f"  \n{_blockquote(f'_{tr}_')}"
+            out.append(block)
     return "\n".join(out)
 
 
