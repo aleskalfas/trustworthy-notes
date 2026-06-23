@@ -456,24 +456,115 @@ def test_large_cited_set_translates_every_entry_across_multiple_batches():
     assert warnings == []                         # full translation → no incompleteness warning
 
 
-def test_failed_batch_warns_and_falls_back_without_blocking_the_rest():
-    # #132: if a batch call raises, warn (not silent), fall its ids back to source, and
-    # still translate the other batches — never crash, never an all-source appendix.
+def test_transiently_failed_batch_recovers_via_retry_without_warning():
+    # #141: a batch call that RAISES once is no longer fatal for its ids — they are retried
+    # in smaller sub-chunks (where the client no longer hits the failing call index) and
+    # recover in full. A transient failure that recovers emits NO incompleteness warning,
+    # and never crashes the document.
     from trustworthy_notes.export import _TRANSLATE_BATCH_SIZE
 
     n = _TRANSLATE_BATCH_SIZE * 2               # two gloss batches, two appendix batches
     cset = _cset_n_cited(n)
-    # fail the SECOND gloss batch only (call index 2: 0=synth, 1=gloss#1, 2=gloss#2)
+    # fail the SECOND gloss batch only (call index 2: 0=synth, 1=gloss#1, 2=gloss#2); the
+    # sub-chunk retries land on later call indices that succeed.
     client = _BatchAwareClient(_synth_citing(n), fail_calls={2})
     warnings: list[str] = []
     md = study_document(cset, client=client, model="m", language="cs", warn=warnings.append)["markdown"]
 
-    assert any("translation incomplete" in w for w in warnings)   # surfaced, not silent
-    # first-batch ids translated; the failed batch's ids fell back to the verbatim quote
+    assert warnings == []                                         # recovered → no warning
+    # both the first-batch ids and the once-failed batch's ids translated in full
     assert "_translation: TR e-1_" in md
-    assert f"verbatim source quote number {n}" in md              # last id's original quote shows
-    assert "_translation: TR e-" + str(n) + "_" not in md        # but no gloss for the failed id
+    assert f"_translation: TR e-{n}_" in md                       # last id recovered on retry
     assert md                                                     # produced a document (no crash)
+
+
+def test_always_failing_batches_warn_and_fall_back_per_key_without_looping():
+    # #141: when every call for a set fails regardless of chunk size, the sub-chunk retry
+    # is BOUNDED (halve to the floor, then stop) — no infinite loop, no crash. The ids that
+    # never came back warn once and fall back to the verbatim source at render time.
+    from trustworthy_notes.export import _TRANSLATE_BATCH_SIZE
+
+    n = _TRANSLATE_BATCH_SIZE                    # one gloss batch, one appendix batch
+    cset = _cset_n_cited(n)
+    # fail EVERY non-synthesis call: the gloss/appendix calls and all their sub-chunk retries
+    client = _BatchAwareClient(_synth_citing(n), fail_calls=set(range(1, 500)))
+    warnings: list[str] = []
+    md = study_document(cset, client=client, model="m", language="cs", warn=warnings.append)["markdown"]
+
+    assert any("translation incomplete" in w for w in warnings)  # surfaced, not silent
+    assert "_translation:" not in md                             # nothing recovered → no gloss line
+    assert f"verbatim source quote number {n}" in md             # original quote shown (fallback)
+    assert md                                                     # bounded retries, no crash
+
+
+class _ChunkSizeAwareClient:
+    """Synthesis on the first call; thereafter translates each requested id ONLY when the
+    batch is at or below ``max_usable`` entries — a larger batch returns nothing usable
+    (simulating the flaky bulk call of #141). Used to prove the sub-chunk retry recovers a
+    set that the full-size call cannot."""
+
+    def __init__(self, synth: str, *, max_usable: int):
+        self.calls: list[dict] = []
+        self._synth = synth
+        self._max_usable = max_usable
+        outer = self
+
+        class _Stream:
+            def __init__(s, text):
+                s._text = text
+
+            def __enter__(s):
+                return s
+
+            def __exit__(s, *e):
+                return False
+
+            def get_final_message(s):
+                return SimpleNamespace(
+                    content=[SimpleNamespace(type="text", text=s._text)], stop_reason="end_turn"
+                )
+
+        def _stream(**kw):
+            idx = len(outer.calls)
+            outer.calls.append(kw)
+            if idx == 0:
+                return _Stream(outer._synth)
+            payload = json.loads(re.search(r"\{.*\}", kw["messages"][0]["content"], re.S).group(0))
+            if len(payload) > outer._max_usable:
+                return _Stream("")                      # bulk call returns nothing usable
+            return _Stream(json.dumps({k: f"TR {k}" for k in payload}))
+
+        self.messages = SimpleNamespace(stream=_stream)
+
+
+def test_flaky_bulk_batch_recovers_fully_via_sub_chunk_retry():
+    # #141 core: a full-size (25) call returns nothing usable, but smaller sub-chunks
+    # succeed. The retry must recover EVERY entry and emit NO incompleteness warning.
+    from trustworthy_notes.export import _TRANSLATE_BATCH_SIZE, _TRANSLATE_MIN_BATCH
+
+    n = _TRANSLATE_BATCH_SIZE                    # a single full-size batch that fails whole
+    cset = _cset_n_cited(n)
+    # usable only at or below half the batch size — so the first full call yields nothing
+    # and recovery happens once chunks shrink (still above the floor)
+    client = _ChunkSizeAwareClient(_synth_citing(n), max_usable=_TRANSLATE_BATCH_SIZE // 2)
+    assert _TRANSLATE_BATCH_SIZE // 2 >= _TRANSLATE_MIN_BATCH
+    warnings: list[str] = []
+    md = study_document(cset, client=client, model="m", language="cs", warn=warnings.append)["markdown"]
+
+    for i in range(1, n + 1):
+        assert f"_translation: TR e-{i}_" in md, i               # every gloss recovered
+        assert f"— TR s-{i}" in md, i                            # every summary recovered
+    assert warnings == []                                        # full recovery → no warning
+
+
+def test_tolerant_parse_handles_json_fences_and_leading_prose():
+    # #141 tolerant parse: a response wrapped in a ```json fence or carrying leading prose
+    # is still parsed (not discarded as unusable) — exercised end-to-end via _translate_map.
+    synth = "## S\n- point [s-1]"
+    fenced_gloss = "Sure, here is the translation:\n```json\n" + json.dumps({"e-1": "Král"}) + "\n```"
+    client = _ScriptedClient(synth, fenced_gloss, _appendix_body())
+    md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
+    assert "_translation: Král_" in md                          # parsed despite fence + prose
 
 
 def test_partial_batch_marked_incomplete_warns():
