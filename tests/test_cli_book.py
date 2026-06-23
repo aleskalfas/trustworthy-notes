@@ -1,7 +1,12 @@
 """CLI test for the `tnotes book` output location: the combined book is written
 beside the source PDF as ``<stem>.tnotes.md/.pdf`` (decision A, issue #18), with
 the reading copy at ``<stem>.tnotes.reading.*``. No PDF parsing or network needed —
-the book command only globs the export dir and renders Markdown."""
+the book command only globs the export dir and renders Markdown.
+
+Also covers issue #138: selection is driven off the EXPORT dir, so `book` works
+from exported chapters alone (no compose stage) — the release smoke path — while
+staying language-aware (no English/`.cs` mixing) and resolving titles from the
+composed notes-set when it exists, else the export heading, else `Chapter N`."""
 
 from __future__ import annotations
 
@@ -123,4 +128,168 @@ def test_book_reading_copy_gets_reading_marker_beside_source(tmp_path, monkeypat
     assert (tmp_path / "Foo-2506.tnotes.reading.md").is_file()
     assert (tmp_path / "Foo-2506.tnotes.reading.pdf").is_file()
     # the cited copy is not produced in a --no-citations run
+    assert not (tmp_path / "Foo-2506.tnotes.md").exists()
+
+
+def _seed_exported_chapter_only(notes_dir, num, body, style="outline", language=None):
+    """Lay down ONLY the exported study-note Markdown for a chapter (no compose
+    notes-set) — the post-export / release-smoke state of issue #138."""
+    dest = workspace.chapter_export_path(notes_dir, num, style, language)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(body, encoding="utf-8")
+
+
+def test_book_builds_from_export_only_no_compose_stage(tmp_path, monkeypatch):
+    # The release smoke (issue #138): only 4-export/chapter-001.outline.md exists, no
+    # compose stage at all, and `book ... --all` must still assemble and render.
+    from trustworthy_notes import pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+
+    src = tmp_path / "fixture.pdf"
+    src.write_bytes(b"")  # placeholder source; book names off it but never opens it
+    notes_dir = workspace.work_dir(src)
+    _seed_exported_chapter_only(
+        notes_dir, 1, "# Smoke chapter\n\nA line the book must carry through.\n"
+    )
+
+    res = runner.invoke(cli.app, ["book", str(src), "--all"])
+    assert res.exit_code == 0, res.stdout
+
+    assert (tmp_path / "fixture.tnotes.pdf").is_file()
+    book_md = (tmp_path / "fixture.tnotes.md").read_text(encoding="utf-8")
+    assert "A line the book must carry through." in book_md
+
+
+def test_book_export_selection_does_not_mix_languages(tmp_path, monkeypatch):
+    # Export-only (no compose) with both an English and a Czech chapter present: the
+    # en book takes only the bare file, `--language cs` only the .cs.md one (#127/#138).
+    from trustworthy_notes import pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    _seed_exported_chapter_only(notes_dir, 1, "# Chapter 1\n\nEnglish body.\n")
+    _seed_exported_chapter_only(notes_dir, 1, "# Chapter 1\n\nČeské tělo.\n", language="cs")
+
+    en = runner.invoke(cli.app, ["book", str(src), "--all"])
+    assert en.exit_code == 0, en.stdout
+    en_md = (tmp_path / "Foo-2506.tnotes.md").read_text(encoding="utf-8")
+    assert "English body." in en_md and "České tělo." not in en_md
+
+    cs = runner.invoke(cli.app, ["book", str(src), "--all", "--language", "cs"])
+    assert cs.exit_code == 0, cs.stdout
+    cs_md = (tmp_path / "Foo-2506.tnotes.md").read_text(encoding="utf-8")
+    assert "České tělo." in cs_md and "English body." not in cs_md
+
+
+def test_book_title_prefers_compose_notes_set(tmp_path, monkeypatch):
+    # When the compose notes-set is present, its chapter_title wins over the export
+    # heading.
+    from trustworthy_notes import pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    _seed_chapter(notes_dir, 1, "Notes-Set Title")  # seeds both export md and notes-set
+    # The export heading differs from the notes-set title so we can tell which won.
+    workspace.chapter_export_path(notes_dir, 1, "outline", None).write_text(
+        "# Heading Title\n\nBody.\n", encoding="utf-8"
+    )
+
+    res = runner.invoke(cli.app, ["book", str(src)])
+    assert res.exit_code == 0, res.stdout
+    book_md = (tmp_path / "Foo-2506.tnotes.md").read_text(encoding="utf-8")
+    assert "Notes-Set Title" in book_md
+    assert "Heading Title" not in book_md
+
+
+def test_book_title_falls_back_to_export_heading(tmp_path, monkeypatch):
+    # No compose notes-set: the title comes from the export's first `# ` heading.
+    from trustworthy_notes import pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    _seed_exported_chapter_only(notes_dir, 1, "# Heading From Export\n\nBody.\n")
+
+    res = runner.invoke(cli.app, ["book", str(src), "--all"])
+    assert res.exit_code == 0, res.stdout
+    book_md = (tmp_path / "Foo-2506.tnotes.md").read_text(encoding="utf-8")
+    assert "Heading From Export" in book_md
+
+
+def test_book_title_falls_back_to_chapter_n_placeholder(tmp_path, monkeypatch):
+    # No notes-set and no heading in the export: the title is the "Chapter N"
+    # placeholder, and --all still includes it (no prose judgement on a placeholder).
+    from trustworthy_notes import pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    _seed_exported_chapter_only(notes_dir, 4, "Body with no heading at all.\n")
+
+    res = runner.invoke(cli.app, ["book", str(src), "--all"])
+    assert res.exit_code == 0, res.stdout
+    book_md = (tmp_path / "Foo-2506.tnotes.md").read_text(encoding="utf-8")
+    assert "Chapter 4" in book_md
+
+
+def test_book_prose_filter_applies_when_title_known(tmp_path, monkeypatch):
+    # Default (prose-only) run: a reference-matter title (from the notes-set) is
+    # excluded, a prose one is kept.
+    from trustworthy_notes import pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    _seed_chapter(notes_dir, 1, "Introduction")  # prose
+    _seed_chapter(notes_dir, 2, "Bibliography")   # reference matter (in _NON_PROSE_TITLES)
+    # Distinct bodies so we can see which chapters were combined.
+    workspace.chapter_export_path(notes_dir, 1, "outline", None).write_text(
+        "# Introduction\n\nProse body.\n", encoding="utf-8"
+    )
+    workspace.chapter_export_path(notes_dir, 2, "outline", None).write_text(
+        "# Bibliography\n\nReference body.\n", encoding="utf-8"
+    )
+
+    res = runner.invoke(cli.app, ["book", str(src)])  # prose-only default
+    assert res.exit_code == 0, res.stdout
+    book_md = (tmp_path / "Foo-2506.tnotes.md").read_text(encoding="utf-8")
+    assert "Prose body." in book_md
+    assert "Reference body." not in book_md
+
+
+def test_book_empty_export_dir_errors_clearly(tmp_path):
+    # Genuinely no exported chapters: the clear "run export first" error, exit 1.
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    workspace.export_dir(notes_dir).mkdir(parents=True, exist_ok=True)  # present but empty
+
+    res = runner.invoke(cli.app, ["book", str(src)])
+    assert res.exit_code == 1
+    assert "no exported chapters" in res.stdout + str(res.stderr)
     assert not (tmp_path / "Foo-2506.tnotes.md").exists()
