@@ -9,6 +9,16 @@ from types import SimpleNamespace
 from trustworthy_notes.export import study_document
 
 
+def _structured(mapping: dict[str, str]) -> str:
+    """A translation-call body in the #146 structured-output shape: a text block carrying
+    ``{"translations": [{"id", "translation"}, ...]}``. The production guarantee that this
+    JSON is valid (and properly escapes quote characters) comes from the schema-constrained
+    API; these doubles stand in that exact shape so the tests exercise the real parse path."""
+    return json.dumps(
+        {"translations": [{"id": k, "translation": v} for k, v in mapping.items()]}
+    )
+
+
 class _FakeClient:
     def __init__(self, text: str):
         message = SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason="end_turn")
@@ -200,8 +210,9 @@ class _ScriptedClient:
 # source language (the fallback path). This default exercises the gloss without asserting
 # on appendix translation.
 def _appendix_body() -> str:
-    """A stock appendix-translation JSON: the cited summary + the labels in 'cs'."""
-    return json.dumps({
+    """A stock appendix-translation body (#146 structured shape): the cited summary + the
+    labels in 'cs'."""
+    return _structured({
         "s-1": "překlad shrnutí",          # statement summary
         "label:claim": "tvrzení",           # basis kind
         "label:body": "tělo",               # source kind
@@ -213,7 +224,7 @@ def test_gloss_rendered_under_quote_when_translating():
     # #116: a non-English target produces a reading-aid translation for the CITED
     # excerpts and renders it beneath the original quote in the cited copy.
     synth = "## S\n- point [s-1]"
-    gloss = json.dumps({"e-1": "Král měl několik manželek"})
+    gloss = _structured({"e-1": "Král měl několik manželek"})
     client = _ScriptedClient(synth, gloss, _appendix_body())
     md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
     assert "The king customarily had several wives" in md      # original quote untouched
@@ -221,11 +232,27 @@ def test_gloss_rendered_under_quote_when_translating():
     assert len(client.calls) == 3                              # synthesis + gloss + appendix
 
 
+def test_translation_calls_attach_structured_output_schema_but_synthesis_does_not():
+    # #146: the gloss + appendix calls request structured outputs (the list-of-pairs schema),
+    # which is what guarantees valid escaped JSON; the synthesis call (call 0) is untouched.
+    from trustworthy_notes.export import _TRANSLATION_SCHEMA
+
+    synth = "## S\n- point [s-1]"
+    client = _ScriptedClient(synth, _structured({"e-1": "x"}), _appendix_body())
+    study_document(_cset(), client=client, model="m", language="cs")
+    assert "output_config" not in client.calls[0] or "format" not in client.calls[0].get(
+        "output_config", {}
+    )                                                              # synthesis: no schema
+    for call in client.calls[1:]:                                  # gloss + appendix: schema attached
+        fmt = call["output_config"]["format"]
+        assert fmt == {"type": "json_schema", "schema": _TRANSLATION_SCHEMA}
+
+
 def test_gloss_only_covers_cited_excerpts_not_every_extracted():
     # cost bound (ADR-008): only excerpts the cited notes surface are sent to translate.
     # Here only s-1 (→ e-1) is cited, so e-2 is never offered for translation.
     synth = "## S\n- point [s-1]"
-    client = _ScriptedClient(synth, json.dumps({"e-1": "x"}), _appendix_body())
+    client = _ScriptedClient(synth, _structured({"e-1": "x"}), _appendix_body())
     study_document(_cset(), client=client, model="m", language="cs")
     gloss_call = client.calls[1]["messages"][0]["content"]
     assert "e-1" in gloss_call
@@ -238,7 +265,7 @@ def test_appendix_summaries_and_labels_render_in_target_language():
     # (basis kind, source kind, page word) render in the target language; the verbatim
     # excerpt is unchanged with its gloss beneath.
     synth = "## S\n- point [s-1]"
-    gloss = json.dumps({"e-1": "Král měl několik manželek"})
+    gloss = _structured({"e-1": "Král měl několik manželek"})
     md = study_document(
         _cset(), client=_ScriptedClient(synth, gloss, _appendix_body()),
         model="m", language="cs",
@@ -253,7 +280,7 @@ def test_appendix_summaries_and_labels_render_in_target_language():
 def test_appendix_only_translates_cited_statements_and_their_labels():
     # cost bound: only the CITED statement summary (s-1) and the labels it uses are sent.
     synth = "## S\n- point [s-1]"
-    client = _ScriptedClient(synth, json.dumps({"e-1": "x"}), _appendix_body())
+    client = _ScriptedClient(synth, _structured({"e-1": "x"}), _appendix_body())
     study_document(_cset(), client=client, model="m", language="cs")
     appendix_call = client.calls[2]["messages"][0]["content"]
     assert "s-1" in appendix_call                              # cited summary sent
@@ -265,7 +292,7 @@ def test_appendix_only_translates_cited_statements_and_their_labels():
 def test_appendix_falls_back_to_source_when_translation_absent():
     # a key the model omits (or a blank/echo) falls back to the original — never an error.
     synth = "## S\n- point [s-1]"
-    client = _ScriptedClient(synth, json.dumps({"e-1": "x"}), json.dumps({}))  # empty appendix map
+    client = _ScriptedClient(synth, _structured({"e-1": "x"}), _structured({}))  # empty appendix map
     md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
     assert "_claim_ — a" in md                                 # original summary + basis kept
     assert "— p.3 (body)" in md                                # original chrome kept
@@ -293,7 +320,7 @@ def test_gloss_absent_from_clean_reading_copy():
     # the clean reading copy strips the whole appendix, so the gloss never appears there.
     from trustworthy_notes.export import strip_citations
     synth = "## S\n- point [s-1]"
-    gloss = json.dumps({"e-1": "Král měl několik manželek"})
+    gloss = _structured({"e-1": "Král měl několik manželek"})
     md = study_document(
         _cset(), client=_ScriptedClient(synth, gloss, _appendix_body()),
         model="m", language="cs",
@@ -312,7 +339,7 @@ def test_gloss_never_mutates_the_anchored_excerpt():
     cset = _cset()
     before = [e["excerpt"] for e in cset["evidence"]]
     synth = "## S\n- point [s-1]"
-    gloss = json.dumps({"e-1": "Král měl několik manželek"})
+    gloss = _structured({"e-1": "Král měl několik manželek"})
     study_document(cset, client=_ScriptedClient(synth, gloss, _appendix_body()), model="m", language="cs")
     after = [e["excerpt"] for e in cset["evidence"]]
     assert after == before                                     # anchored excerpt untouched
@@ -329,7 +356,7 @@ def test_anchor_checks_ignore_translated_appendix_text():
 
     cset = _cset()
     synth = "## S\n- point [s-1, s-2]"
-    gloss = json.dumps({"e-1": "Král měl několik manželek", "e-2": "malé vyobrazení manželky"})
+    gloss = _structured({"e-1": "Král měl několik manželek", "e-2": "malé vyobrazení manželky"})
     _sd(cset, client=_ScriptedClient(synth, gloss, _appendix_body()), model="m", language="cs")
 
     # The source "pages": the body stream must contain each verbatim excerpt. The
@@ -350,7 +377,7 @@ def test_anchor_checks_ignore_translated_appendix_text():
 def test_gloss_echoing_source_is_dropped():
     # a model that just echoes the source text back adds no reading value → not rendered.
     synth = "## S\n- point [s-1]"
-    echo = json.dumps({"e-1": "The king customarily had several wives in the Old Kingdom"})
+    echo = _structured({"e-1": "The king customarily had several wives in the Old Kingdom"})
     md = study_document(
         _cset(), client=_ScriptedClient(synth, echo, _appendix_body()),
         model="m", language="cs",
@@ -424,7 +451,7 @@ class _BatchAwareClient:
             if outer._partial:                          # drop most keys → truncation signature
                 keep = sorted(mapping)[: max(0, len(mapping) // 4)]
                 mapping = {k: mapping[k] for k in keep}
-            return _Stream(json.dumps(mapping))
+            return _Stream(_structured(mapping))
 
         self.messages = SimpleNamespace(stream=_stream)
 
@@ -532,7 +559,7 @@ class _ChunkSizeAwareClient:
             payload = json.loads(re.search(r"\{.*\}", kw["messages"][0]["content"], re.S).group(0))
             if len(payload) > outer._max_usable:
                 return _Stream("")                      # bulk call returns nothing usable
-            return _Stream(json.dumps({k: f"TR {k}" for k in payload}))
+            return _Stream(_structured({k: f"TR {k}" for k in payload}))
 
         self.messages = SimpleNamespace(stream=_stream)
 
@@ -557,14 +584,24 @@ def test_flaky_bulk_batch_recovers_fully_via_sub_chunk_retry():
     assert warnings == []                                        # full recovery → no warning
 
 
-def test_tolerant_parse_handles_json_fences_and_leading_prose():
-    # #141 tolerant parse: a response wrapped in a ```json fence or carrying leading prose
-    # is still parsed (not discarded as unusable) — exercised end-to-end via _translate_map.
-    synth = "## S\n- point [s-1]"
-    fenced_gloss = "Sure, here is the translation:\n```json\n" + json.dumps({"e-1": "Král"}) + "\n```"
-    client = _ScriptedClient(synth, fenced_gloss, _appendix_body())
-    md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
-    assert "_translation: Král_" in md                          # parsed despite fence + prose
+def test_translate_batch_preserves_value_containing_a_quote_character():
+    # #146 regression: a translation whose VALUE contains a double-quote character used to
+    # produce invalid (unescaped) free-text JSON that json.loads could not parse, falling the
+    # entry silently back to the source language. Structured outputs make the API return
+    # schema-validated, properly-escaped JSON; this locks in that the parse path
+    # (_translate_batch's json.loads + rebuild + keep-if-differs) preserves such a value
+    # verbatim. The production escaping guarantee comes from the schema-constrained API; here
+    # _structured() stands in that exact (valid) shape so the unit asserts the parse, not the SDK.
+    from trustworthy_notes.export import _translate_batch, _GLOSS_SYSTEM
+
+    quoted = 'Agenti analyzují scénáře „od povrchního k hlubokému" – a tak dále'
+    client = _ScriptedClient(_structured({"e-1": quoted}))
+    kept = _translate_batch(
+        {"e-1": "Agents analyze scenarios from shallow to deep, and so on"},
+        system=_GLOSS_SYSTEM, instruction="(payload)",
+        client=client, model="m", effort="low", max_tokens=2000,
+    )
+    assert kept == {"e-1": quoted}                              # quote-containing value round-trips
 
 
 def test_partial_batch_marked_incomplete_warns():
