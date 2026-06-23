@@ -111,6 +111,21 @@ def test_export_flags_stray_citations():
     assert "[s-99](#note-s-99)" not in res["markdown"]            # stray not linked
 
 
+def test_multi_line_excerpt_stays_one_blockquote():
+    # #148: a source PDF's hard-wrapped excerpt carries interior newlines. Every line must
+    # be `> `-prefixed so it renders as ONE contiguous blockquote — without this fix the
+    # quote closes after line 1 and the rest spills into plain body text. Bytes preserved.
+    cset = _cset()
+    excerpt = "first wrapped line of the quote\nsecond wrapped line\nthird wrapped line"
+    cset["evidence"][0]["excerpt"] = excerpt
+    body = "## S\n- point [s-1]"
+    md = study_document(cset, client=_FakeClient(body), model="m")["markdown"]
+    for line in excerpt.split("\n"):
+        assert f"> {line}" in md                                  # every excerpt line is quoted
+    assert excerpt in md.replace("> ", "")                        # verbatim words preserved, byte-for-byte
+    assert "\nfirst wrapped line" not in md                       # no un-prefixed (plain-body) spillover
+
+
 def _user_prompt_for(language, *, body="## S\n- point [s-1]", warn=None):
     """Run study_document with a language and return (client, result) so a test can
     inspect the exact prompt sent and the resolved output."""

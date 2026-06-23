@@ -463,6 +463,15 @@ def strip_citations(md: str) -> str:
     return md.rstrip() + "\n"
 
 
+def _blockquote(text: str) -> str:
+    """Prefix EVERY line of ``text`` with ``> `` so a multi-line value stays one
+    contiguous Markdown blockquote (#148). An interior ``\\n`` that is NOT re-prefixed
+    closes the quote early and spills the rest into plain body text — the verbatim
+    excerpts carry the source PDF's hard-wrapped breaks, so this bites. The words are
+    untouched, only line-prefix added (ADR-008 verbatim invariant)."""
+    return "\n".join(f"> {line}" for line in text.split("\n"))
+
+
 def _notes_appendix(
     cset: dict, cited: set[str], gloss: Optional[dict[str, str]] = None,
     appendix: Optional[dict[str, str]] = None,
@@ -512,13 +521,17 @@ def _notes_appendix(
             q = q if len(q) <= 240 else q[:237] + "…"
             page_word = label(_PAGE_WORD)
             source_kind = label(e.get("source", "body"))
-            out.append(f"> {q}  \n> — {page_word}{page}{loc} ({source_kind})")
+            # prefix EVERY line of the (possibly multi-line) excerpt so it stays one
+            # blockquote (#148); keep the trailing 2-space hard break so the citation
+            # line below stays in the same block.
+            out.append(f"{_blockquote(q)}  \n> — {page_word}{page}{loc} ({source_kind})")
             tr = gloss.get(eid) or e.get("excerpt_translation")
             if tr:
                 tr = tr if len(tr) <= 240 else tr[:237] + "…"
                 # reading aid, BENEATH the quote, visually distinct (italic) and labelled —
                 # never a replacement for the verbatim evidence above (ADR-008).
-                out.append(f"> _translation: {tr}_")
+                # per-line prefix defensively in case a gloss ever carries a newline (#148).
+                out.append(_blockquote(f"_translation: {tr}_"))
     return "\n".join(out)
 
 
