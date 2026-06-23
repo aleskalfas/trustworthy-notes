@@ -243,7 +243,11 @@ def test_gloss_rendered_under_quote_when_translating():
     client = _ScriptedClient(synth, gloss, _appendix_body())
     md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
     assert "The king customarily had several wives" in md      # original quote untouched
-    assert ">\n> _Král měl několik manželek_" in md            # gloss in its own block, italic, no label (#150)
+    # #152: gloss is a hard-break line in the SAME blockquote (joined to the citation), italic,
+    # no label (#150). NOT a bare `>` separator — that splits the box in the reader.
+    assert "  \n> _Král měl několik manželek_" in md
+    assert "\n>\n" not in md                                   # no bare `>` line splitting the block (#152)
+    assert "— strana 3 (tělo)  \n> _Král měl několik manželek_" in md  # citation + gloss, one block, no empty `>` between
     assert "translation:" not in md                            # English label word dropped entirely (#150)
     assert len(client.calls) == 3                              # synthesis + gloss + appendix
 
@@ -290,7 +294,8 @@ def test_appendix_summaries_and_labels_render_in_target_language():
     assert "— strana 3 (tělo)" in md                           # page word + source kind translated
     assert "page 3 (body)" not in md                           # English chrome NOT present
     assert "The king customarily had several wives" in md      # verbatim excerpt untouched
-    assert ">\n> _Král měl několik manželek_" in md            # gloss in its own block, italic, no label (#150)
+    assert "  \n> _Král měl několik manželek_" in md           # gloss: hard-break line, same block, italic, no label (#150/#152)
+    assert "\n>\n" not in md                                   # no bare `>` line splitting the block (#152)
 
 
 def test_appendix_only_translates_cited_statements_and_their_labels():
