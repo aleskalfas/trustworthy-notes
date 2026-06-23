@@ -10,12 +10,27 @@ composed notes-set when it exists, else the export heading, else `Chapter N`."""
 
 from __future__ import annotations
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
 from trustworthy_notes import cli, workspace
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config(tmp_path, monkeypatch):
+    """Point config at a throwaway dir so language resolution is hermetic.
+
+    `book`/`export` resolve the preferred language via config.resolve_language,
+    which otherwise reads the developer's real ~/.trustworthy-notes/config.yaml.
+    A real `language: cs` there would make a no-flag run look for `.cs.md`
+    chapters and miss the bare-English files these tests seed. TN_CONFIG_DIR is
+    the supported override (read live by config.config_dir), so the suite passes
+    regardless of the ambient user config.
+    """
+    monkeypatch.setenv("TN_CONFIG_DIR", str(tmp_path / "cfg"))
 
 
 def _seed_chapter(notes_dir, num, title, style="outline"):

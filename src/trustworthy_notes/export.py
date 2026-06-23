@@ -85,12 +85,12 @@ _GLOSS_SYSTEM = (
 # token headroom for both the gloss (verbatim quotes) and the appendix (summaries) passes.
 _TRANSLATE_BATCH_SIZE = 25
 
-# A batch is "markedly incomplete" — the truncation / partial-parse signature this fix
-# targets (#132) — when it keeps fewer than this fraction of the entries it asked about.
-# A model may legitimately echo or skip a handful of keys (those fall back quietly), so we
-# do NOT warn on a small shortfall; only a near-total loss (a truncated or unparseable
-# response) crosses the bar. Tuned below the rate scattered legitimate echoes produce.
-_TRANSLATE_MIN_KEPT_FRACTION = 0.5
+# Floor for the retry-in-smaller-sub-chunks recovery (#141). A flaky bulk call can come
+# back unusable (entries unchanged, or not-quite-JSON) for a whole batch; rather than
+# falling that batch's ids straight to the source language, we retry the still-missing
+# ids in progressively smaller sub-chunks (halving each round). We stop halving at this
+# floor so the work stays bounded — below it the extra calls cost more than they recover.
+_TRANSLATE_MIN_BATCH = 5
 
 
 def _translate_batch(
@@ -101,7 +101,11 @@ def _translate_batch(
     id -> translation map for this batch — ids we asked about whose translation is
     non-blank and actually DIFFERS from the source (an echo adds no value). May raise if
     the call itself fails; the caller decides how to surface that. A blank/unparseable
-    body is not an error here — it just yields {} (the per-key fallback then applies)."""
+    body is not an error here — it just yields {} (the retry / per-key fallback applies).
+
+    The body is parsed TOLERANTLY (``_parse_gloss_json``, #141): a response wrapped in a
+    ```json fence or carrying leading/trailing prose still parses, so a recoverable answer
+    is not discarded as unusable. The keep-if-differs filter is unchanged."""
     output_config: dict = {}
     if effort:
         output_config["effort"] = effort
@@ -123,6 +127,67 @@ def _translate_batch(
     }
 
 
+def _translate_round(
+    items: dict[str, str], chunk_size: int, *,
+    system: str, build_instruction: Callable[[dict[str, str]], str],
+    client: "anthropic.Anthropic", model: str, effort: str, max_tokens: int,
+) -> dict[str, str]:
+    """One pass over ``items`` in calls of at most ``chunk_size`` entries; returns the kept
+    id -> translation map. A call that RAISES is swallowed (its ids stay missing for the
+    caller to retry smaller or fall back) so one flaky call never blocks the rest."""
+    keys = list(items)
+    out: dict[str, str] = {}
+    for start in range(0, len(keys), chunk_size):
+        batch = {k: items[k] for k in keys[start:start + chunk_size]}
+        try:
+            out.update(_translate_batch(
+                batch, system=system, instruction=build_instruction(batch),
+                client=client, model=model, effort=effort, max_tokens=max_tokens,
+            ))
+        except Exception:  # noqa: BLE001 — a failed call must not block the document
+            continue
+    return out
+
+
+def _translate_chunk(
+    items: dict[str, str], chunk_size: int, *,
+    system: str, build_instruction: Callable[[dict[str, str]], str],
+    client: "anthropic.Anthropic", model: str, effort: str, max_tokens: int,
+) -> dict[str, str]:
+    """Translate ``items``, recovering a flaky bulk call by retrying the still-missing ids
+    in progressively smaller sub-chunks (#141).
+
+    Returns the kept id -> translation map (entries that differ from the source); ids that
+    never came back are simply absent — the caller decides how to surface that. A call that
+    returns its entries unchanged, returns not-quite-JSON, or RAISES leaves its ids missing,
+    so a transient bulk-call failure still has a path to recover.
+
+    Bounded descent: start at ``chunk_size`` and, while ids remain missing, HALVE the size
+    and re-attempt only those ids. The loop stops on the first of three conditions — no ids
+    left missing, the size has reached ``_TRANSLATE_MIN_BATCH`` (the floor), or a whole
+    round recovered NOTHING new (a set the model will not translate, so further shrinking is
+    futile). The genuinely-still-missing ids after the loop are left for the caller's per-key
+    source fallback."""
+    merged = _translate_round(
+        items, chunk_size, system=system, build_instruction=build_instruction,
+        client=client, model=model, effort=effort, max_tokens=max_tokens,
+    )
+    size = chunk_size
+    while size > _TRANSLATE_MIN_BATCH:
+        missing = {k: v for k, v in items.items() if k not in merged}
+        if not missing:
+            break
+        size = max(_TRANSLATE_MIN_BATCH, size // 2)
+        recovered = _translate_round(
+            missing, size, system=system, build_instruction=build_instruction,
+            client=client, model=model, effort=effort, max_tokens=max_tokens,
+        )
+        if not recovered:                   # this round gained nothing → stop, don't churn
+            break
+        merged.update(recovered)
+    return merged
+
+
 def _translate_map(
     items: dict[str, str], language: str, *,
     system: str, build_instruction: Callable[[dict[str, str]], str],
@@ -142,13 +207,15 @@ def _translate_map(
     avoids the truncated / partial JSON that an oversized single call produced, which used
     to silently fall the whole appendix back to the source language (#132).
 
-    A batch that RAISES, or returns MARKEDLY fewer keys than it was asked about (below
-    ``_TRANSLATE_MIN_KEPT_FRACTION`` — the truncation / partial-parse signature), is
-    surfaced via ``warn`` (one line). The missing ids still fall back to the original at
-    render time (never a crash, never blocking), but no longer silently. A small shortfall
-    — a model legitimately echoing or skipping a handful of keys — is expected and does NOT
-    warn. Kept entries are those with a non-blank translation that DIFFERS from the source
-    (an echo adds no value).
+    A flaky chunk — one that RAISES, returns its entries unchanged, or returns not-quite-
+    JSON — used to fall its whole batch back to the source language (#141: in a Czech book,
+    later notes' bold summaries stayed English while their labels were Czech). Now such a
+    chunk is RETRIED in smaller sub-chunks (``_translate_chunk``, halving down to
+    ``_TRANSLATE_MIN_BATCH``) and anything recovered is merged. Only the ids that remain
+    untranslated AFTER retries are surfaced via ``warn`` (one line) and fall back per-key to
+    the original at render time — never a crash, never blocking. A document that fully
+    recovers emits NO warning. Kept entries are those with a non-blank translation that
+    DIFFERS from the source (an echo adds no value).
 
     This never re-reads the source page and its output never enters a §7 check. The model
     seam is the same injectable ``client``/``model`` the synthesis uses, so it is testable
@@ -156,31 +223,19 @@ def _translate_map(
     """
     if not items:
         return {}
-    keys = list(items)
-    merged: dict[str, str] = {}
-    for start in range(0, len(keys), _TRANSLATE_BATCH_SIZE):
-        batch = {k: items[k] for k in keys[start:start + _TRANSLATE_BATCH_SIZE]}
-        try:
-            result = _translate_batch(
-                batch, system=system, instruction=build_instruction(batch),
-                client=client, model=model, effort=effort, max_tokens=max_tokens,
-            )
-        except Exception as exc:  # a failed batch must not block the whole document
-            if warn:
-                warn(
-                    f"translation incomplete: {len(batch)} of {len(batch)} entries in a "
-                    f"batch kept their original language ({type(exc).__name__}: {exc})"
-                )
-            continue
-        merged.update(result)
-        kept = sum(1 for k in batch if k in result)
-        # A near-total loss for a batch is the #132 signature (truncated/partial JSON);
-        # the few missing ids of a normal batch fall back quietly without a warning.
-        if kept < len(batch) * _TRANSLATE_MIN_KEPT_FRACTION and warn:
-            warn(
-                f"translation incomplete: {len(batch) - kept} of {len(batch)} entries in a "
-                f"batch kept their original language (source-language fallback)"
-            )
+    merged = _translate_chunk(
+        items, _TRANSLATE_BATCH_SIZE,
+        system=system, build_instruction=build_instruction,
+        client=client, model=model, effort=effort, max_tokens=max_tokens,
+    )
+    # The warning reflects POST-RETRY reality (#141): only ids still untranslated after the
+    # sub-chunk recovery count — a batch that retried successfully emits nothing.
+    missing = [k for k in items if k not in merged]
+    if missing and warn:
+        warn(
+            f"translation incomplete: {len(missing)} of {len(items)} entries kept their "
+            f"original language after retries (source-language fallback)"
+        )
     return merged
 
 

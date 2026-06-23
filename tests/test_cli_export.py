@@ -6,12 +6,28 @@ network — study_document and the Anthropic client are stubbed."""
 from __future__ import annotations
 
 import anthropic
+import pytest
 import yaml
 from typer.testing import CliRunner
 
 from trustworthy_notes import cli, config, export as exp, workspace
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config(tmp_path, monkeypatch):
+    """Point config at a throwaway dir so language resolution is hermetic.
+
+    Without an explicit --language, `export` resolves the preferred language via
+    config.resolve_language, which otherwise reads the developer's real
+    ~/.trustworthy-notes/config.yaml. A real `language: cs` there would make the
+    no-flag run write `chapter-NNN.outline.cs.md` instead of the bare English file
+    test_export_writes_language_aware_filename asserts. TN_CONFIG_DIR is the
+    supported override (read live by config.config_dir), so the test passes
+    regardless of the ambient user config.
+    """
+    monkeypatch.setenv("TN_CONFIG_DIR", str(tmp_path / "cfg"))
 
 
 def _seed_chapter(notes_dir, num=6, title="Background"):
