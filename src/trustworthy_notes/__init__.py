@@ -1,3 +1,3 @@
 """trustworthy-notes: trustworthy, evidence-anchored notes from PDF documents."""
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
