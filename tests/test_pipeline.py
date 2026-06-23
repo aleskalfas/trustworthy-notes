@@ -424,6 +424,125 @@ def test_gate_default_non_interactive_confirm_declines(tmp_path, stub_pipeline, 
     assert seen["language"] is None
 
 
+# ---- language-aware export cache (issue #127) ----
+
+
+def _study_calls(monkeypatch):
+    """Replace study_document with a stub that records each (style, language) it was
+    called with and writes language-distinguishable markdown, so a test can assert
+    which language actually (re)ran and which prose the book assembled from."""
+    seen: list[dict] = []
+
+    def capturing_study(cset, *, style, language=None, **kw):
+        seen.append({"style": style, "language": language})
+        lang = language or "en"
+        return {"markdown": f"## Point ({lang})\n- a claim [s-1](#note-s-1)\n",
+                "cited": {"s-1"}, "unknown": []}
+
+    monkeypatch.setattr(pipeline.exp, "study_document", capturing_study)
+    return seen
+
+
+def test_language_change_regenerates_export_not_reuses_english(
+    tmp_path, stub_pipeline, monkeypatch
+):
+    # #127: an English run then a `--language cs` run must REGENERATE the export
+    # (study_document invoked with language="cs"), not skip on the English files.
+    study = _study_calls(monkeypatch)
+    src = _src(tmp_path)
+
+    pipeline.run(src, parse_pages=_parse_pages)                      # English (native)
+    assert [c["language"] for c in study] == [None]                 # one English export
+
+    study.clear()
+    pipeline.run(src, language="cs", parse_pages=_parse_pages)       # now Czech
+    assert study, "cs run must regenerate the export, not reuse the English cache"
+    assert all(c["language"] == "cs" for c in study)
+
+    # Both languages now cached as separate files in the export dir.
+    exdir = workspace.export_dir(workspace.work_dir(src))
+    names = {p.name for p in exdir.glob("chapter-*.md")}
+    assert "chapter-001.outline.md" in names        # English: bare name (backward-compat)
+    assert "chapter-001.outline.cs.md" in names      # Czech: language-suffixed
+
+
+def test_same_language_run_twice_caches(tmp_path, stub_pipeline, monkeypatch):
+    # Second identical cs run skips (cached); English twice skips too.
+    study = _study_calls(monkeypatch)
+    src = _src(tmp_path)
+
+    pipeline.run(src, language="cs", parse_pages=_parse_pages)
+    assert [c["language"] for c in study] == ["cs"]
+    study.clear()
+    pipeline.run(src, language="cs", parse_pages=_parse_pages)        # cached
+    assert study == [], "a second identical cs run must skip the export"
+
+    study.clear()
+    pipeline.run(src, parse_pages=_parse_pages)                       # English, first time
+    assert [c["language"] for c in study] == [None]
+    study.clear()
+    pipeline.run(src, parse_pages=_parse_pages)                       # English, cached
+    assert study == [], "a second English run must skip the export"
+
+
+def test_force_regenerates_regardless_of_language(tmp_path, stub_pipeline, monkeypatch):
+    study = _study_calls(monkeypatch)
+    src = _src(tmp_path)
+    pipeline.run(src, language="cs", parse_pages=_parse_pages)
+    study.clear()
+    pipeline.run(src, language="cs", force=True, parse_pages=_parse_pages)
+    assert [c["language"] for c in study] == ["cs"]   # --force always re-runs
+
+
+def test_book_assembles_the_runs_language_not_a_mix(tmp_path, stub_pipeline, monkeypatch):
+    # #127: after both languages are exported, a cs run's book must assemble from the
+    # cs chapter files — not the English ones, and not a mix of both.
+    _study_calls(monkeypatch)
+    src = _src(tmp_path)
+
+    pipeline.run(src, parse_pages=_parse_pages)                       # English exported
+    pipeline.run(src, language="cs", parse_pages=_parse_pages)        # cs exported
+    cs_book = stub_pipeline["books"]["md"]
+    assert "(cs)" in cs_book and "(en)" not in cs_book
+
+    pipeline.run(src, parse_pages=_parse_pages)                       # English book again
+    en_book = stub_pipeline["books"]["md"]
+    assert "(en)" in en_book and "(cs)" not in en_book
+
+
+def test_english_path_filenames_unchanged(tmp_path, stub_pipeline, monkeypatch):
+    # Backward-compat: the English/native path writes the same bare names as before.
+    _study_calls(monkeypatch)
+    src = _src(tmp_path)
+    pipeline.run(src, parse_pages=_parse_pages)
+    exdir = workspace.export_dir(workspace.work_dir(src))
+    names = sorted(p.name for p in exdir.glob("chapter-*.md"))
+    assert names == ["chapter-001.outline.md"]   # no language segment on the default path
+
+
+def test_translation_log_only_on_actual_regeneration(tmp_path, stub_pipeline, monkeypatch):
+    # #127: the "writing in <lang>" line must reflect reality — emitted when the cs
+    # export actually runs, and NOT on a fully-cached cs reuse.
+    _study_calls(monkeypatch)
+    src = _src(tmp_path)
+
+    logs: list[str] = []
+    pipeline.run(src, language="cs", parse_pages=_parse_pages, log=logs.append)
+    assert any("writing in cs" in m for m in logs)   # first cs run translates → announces
+
+    logs.clear()
+    pipeline.run(src, language="cs", parse_pages=_parse_pages, log=logs.append)
+    assert not any("writing in" in m for m in logs)  # fully cached → no false claim
+
+
+def test_english_run_never_announces_translation(tmp_path, stub_pipeline, monkeypatch):
+    _study_calls(monkeypatch)
+    src = _src(tmp_path)
+    logs: list[str] = []
+    pipeline.run(src, parse_pages=_parse_pages, log=logs.append)
+    assert not any("writing in" in m for m in logs)  # native path makes no claim
+
+
 def test_single_section_document_still_yields_a_book(tmp_path, stub_pipeline):
     # The stub assemble emits exactly one section; with prose_only off (the --all
     # behaviour) it must still export and produce a book — no "0 chapters" dead-end.

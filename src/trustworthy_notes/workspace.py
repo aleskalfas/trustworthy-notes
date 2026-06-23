@@ -77,3 +77,25 @@ def export_dir(work_dir: str | Path) -> Path:
 def page_notes_path(work_dir: str | Path, page_index: int) -> Path:
     """Canonical per-page notes file: ``<work_dir>/1-extract/page-NNNN.notes.yaml``."""
     return extract_dir(work_dir) / f"page-{page_index:04d}.notes.yaml"
+
+
+def chapter_export_path(
+    work_dir: str | Path, num: int, style: str, language: str | None = None
+) -> Path:
+    """Canonical per-chapter study-document file inside the Wave 4 folder.
+
+    The filename is the cache identity for an exported chapter, and that identity
+    is **language-aware** (issue #127): re-running in a different reading language
+    must regenerate, not reuse the prior language's prose. The English/native path
+    keeps the bare ``chapter-NNN.<style>.md`` name (byte-for-byte unchanged, no
+    churn); a target language adds a ``.<lang>`` segment — ``chapter-NNN.<style>.<lang>.md``
+    — so each language is its own independently-cached file.
+
+    Both the writer (``_export``) and the assembler (``_book``) build the path here,
+    so they always agree on which file a given run reads and writes. The
+    English/native predicate is ``export._is_default_language`` (imported lazily to
+    avoid pulling the export module's API client into this path-only helper)."""
+    from .export import _is_default_language
+
+    suffix = "" if _is_default_language(language) else f".{language.strip().lower()}"
+    return export_dir(work_dir) / f"chapter-{num:03d}.{style}{suffix}.md"
