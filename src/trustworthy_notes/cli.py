@@ -1036,6 +1036,27 @@ def stitches(
     report.emit(workspace.compose_stage_dir(notes_dir, "stitches") / "stitches.txt", fp, force, render, label="tnotes stitches")
 
 
+def _chapter_title(chapters_dir: Path, num: int, exported_md: str) -> str | None:
+    """Best-known title for an exported chapter, or None when nothing names it.
+
+    Order (#138): the composed notes-set's ``source.chapter_title`` when that file
+    still exists (the authoritative title); else the export Markdown's first ``# ``
+    heading; else None — the caller substitutes a ``Chapter N`` placeholder. None is
+    distinct from a placeholder so the prose-only filter only judges real titles."""
+    import yaml as _yaml
+
+    cfile = chapters_dir / f"chapter-{num:03d}.notes.yaml"
+    if cfile.is_file():
+        src = (_yaml.safe_load(cfile.read_text(encoding="utf-8")) or {}).get("source", {})
+        title = src.get("chapter_title") or src.get("chapter_id")
+        if title:
+            return title
+    for line in exported_md.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return None
+
+
 @app.command()
 def book(
     input: Path = typer.Argument(..., exists=True, dir_okay=False, help="Source PDF."),
@@ -1076,38 +1097,40 @@ def book(
     chapters — so a translated book never mixes in English chapters (#127). Run
     `tnotes export --language <lang> --pdf` first. No API calls.
     """
-    import yaml as _yaml
-
     from . import book as bookmod, compose, export as exp, pdf as pdfmod
 
     language = config.resolve_language(language)
     notes_dir = workspace.work_dir(input, notes_dir)
 
-    # Drive selection off the composed chapter notes-sets (the authoritative chapter
-    # list) and resolve each to its language-aware export path — the same path `export`
-    # wrote — so a `cs` book is built from .cs.md files and never mixes in English ones
-    # (a bare chapter-*.<style>.md glob would match both languages) (#127).
-    notes_files = sorted(
-        workspace.compose_stage_dir(notes_dir, "chapters").glob("chapter-*.notes.yaml")
-    )
+    # Drive selection off the EXPORT dir (#138): the exported chapter Markdown is the
+    # only artefact `book` needs, so a post-export invocation works even when the
+    # compose stage is gone (e.g. the release smoke fabricates only 4-export/). The
+    # composed notes-set is consulted for titles below when present, but never gates
+    # selection. We glob every chapter-*.md and keep a candidate only when its filename
+    # equals the path `export` would write for this run's style+language via
+    # `workspace.chapter_export_path` — a single equality check that drops both wrong
+    # styles and the wrong language (so an English book, bare chapter-NNN.<style>.md,
+    # never picks up a `.cs.md` chapter and vice versa, #127), and keeps the naming
+    # single-sourced with the writer rather than re-deriving the suffix rule here.
+    exdir = workspace.export_dir(notes_dir)
+    cdir = workspace.compose_stage_dir(notes_dir, "chapters")
     chapters: list[tuple[int, str, str]] = []
     skipped = 0
-    missing = 0
-    for cfile in notes_files:
-        num = int(cfile.stem.split("-")[1].split(".")[0])
-        f = workspace.chapter_export_path(notes_dir, num, style, language)
-        src = (_yaml.safe_load(cfile.read_text(encoding="utf-8")) or {}).get("source", {})
-        title = src.get("chapter_title") or src.get("chapter_id") or f"Chapter {num}"
-        if prose_only and not compose._is_prose_section(title):
+    for f in sorted(exdir.glob("chapter-*.md")):
+        num = int(f.stem.split("-")[1].split(".")[0])
+        if f != workspace.chapter_export_path(notes_dir, num, style, language):
+            continue  # wrong style, or another language (.cs.md under an en run, or vice versa)
+        md = f.read_text(encoding="utf-8")
+        title = _chapter_title(cdir, num, md)
+        # The prose-only filter needs a real title to judge by; skip it when the title
+        # is the "Chapter N" placeholder (no notes-set, no heading) — there's no signal
+        # the chapter is reference matter, so exclude nothing on a guess.
+        if prose_only and title is not None and not compose._is_prose_section(title):
             skipped += 1
             continue
-        if not f.is_file():
-            missing += 1  # not exported for this language — skip, don't mix another language in
-            continue
-        chapters.append((num, title, f.read_text(encoding="utf-8")))
+        chapters.append((num, title or f"Chapter {num}", md))
 
     if not chapters:
-        exdir = workspace.export_dir(notes_dir)
         typer.echo(
             f"no exported chapters for language {language!r} in {exdir} — run "
             f"`tnotes export --language {language}` first.",
@@ -1129,7 +1152,6 @@ def book(
     typer.echo(f"combined {len(chapters)} chapters"
                + (" (no citations — reading copy)" if no_citations else "")
                + (f" (skipped {skipped} reference sections; --all to include)" if skipped else "")
-               + (f" ({missing} not yet exported for {language!r})" if missing else "")
                + f" → {md_path} and {pdf_path.name}")
 
 
