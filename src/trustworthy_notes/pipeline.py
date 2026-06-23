@@ -118,7 +118,9 @@ def resolve_translation(
     if src == pref:
         return None  # already in the preferred language — nothing to translate
     if explicit:
-        log(f"translate: writing in {preferred} (explicit --language)")
+        # The flag is the decision, but the "writing in <lang>" announcement is made
+        # by _export only when it actually (re)generates — a fully-cached reuse must
+        # not claim a translation that didn't run (#127).
         return preferred
     if src in (LANGUAGE_UNKNOWN, LANGUAGE_MIXED) or not src:
         # Can't trust a single source language → don't offer; leave it native.
@@ -192,7 +194,8 @@ def run(
     )
 
     _export(input_path, work, force, style, model, effort, api_key, log, language=export_language)
-    return _book(input_path, work, pages, cite, style, log, keep_md=keep_md)
+    return _book(input_path, work, pages, cite, style, log, keep_md=keep_md,
+                 language=export_language)
 
 
 def _extract(input_path, work, pages, force, model, effort, api_key, parse_pages, log,
@@ -330,7 +333,11 @@ def _export(input_path, work, force, style, model, effort, api_key, log, *, lang
     pending = []
     for f in files:
         num = int(f.stem.split("-")[1].split(".")[0])
-        dest = out_dir / f"chapter-{num:03d}.{style}.md"
+        # Cache identity is language-aware (#127): the dest filename carries the
+        # target language, so an English run and a `--language cs` run cache to
+        # different files and a language change regenerates instead of silently
+        # reusing the prior language's prose.
+        dest = workspace.chapter_export_path(work, num, style, language)
         if dest.is_file() and not force:
             skipped += 1
             continue
@@ -341,6 +348,11 @@ def _export(input_path, work, force, style, model, effort, api_key, log, *, lang
         return
 
     log(f"[6/7] export: {len(pending)} of {len(files)} chapter(s) (the rest are up to date)")
+    # Announce the translation only now that we know a target-language chapter will
+    # actually (re)run — a fully-cached reuse returned above and never makes the claim,
+    # and the English/native path never announces a translation at all (#127).
+    if not exp._is_default_language(language):
+        log(f"translate: writing in {language}")
     client = anthropic.Anthropic(api_key=api_key)
     for num, f, dest in pending:
         cset = yaml.safe_load(f.read_text(encoding="utf-8"))
@@ -355,28 +367,38 @@ def _export(input_path, work, force, style, model, effort, api_key, log, *, lang
         log(f"  chapter {num} ({title}): {len(res['cited'])} notes cited")
 
 
-def _book(input_path, work, pages, cite, style, log, keep_md=False) -> Path:
+def _book(input_path, work, pages, cite, style, log, keep_md=False, *, language=None) -> Path:
     """Combine the per-chapter exports into the finished book beside the source.
 
     The orchestrator's book includes all sections (the ``--all`` behaviour) and is
     PROSE by default; ``cite`` keeps the [s-N] markers and Notes & Sources
     appendix. The single output is ``<stem>[.pRANGE].tnotes.pdf``; ``keep_md`` (the
-    ``--md`` flag) also writes the Markdown book beside it for those who want it."""
-    exdir = workspace.export_dir(work)
-    files = sorted(exdir.glob(f"chapter-*.{style}.md"))
-    if not files:
-        raise ValueError("no exported chapters to assemble into a book")
+    ``--md`` flag) also writes the Markdown book beside it for those who want it.
 
+    ``language`` is this run's resolved reading language; the book is assembled from
+    THIS language's exported chapters, not all of them (#127). We drive selection off
+    the composed chapter notes-sets (the authoritative chapter list) and resolve each
+    one to its language-aware export path via ``workspace.chapter_export_path`` — the
+    same path ``_export`` wrote — so a glob can never mix an English file in with a
+    ``cs`` run (the bare ``chapter-NNN.<style>.md`` glob would match both)."""
+    notes_files = sorted(
+        workspace.compose_stage_dir(work, "chapters").glob("chapter-*.notes.yaml")
+    )
     chapters: list[tuple[int, str, str]] = []
-    for f in files:
-        num = int(f.stem.split("-")[1].split(".")[0])
-        cfile = workspace.compose_stage_dir(work, "chapters") / f"chapter-{num:03d}.notes.yaml"
-        src = (yaml.safe_load(cfile.read_text(encoding="utf-8")) or {}).get("source", {}) if cfile.is_file() else {}
+    for cfile in notes_files:
+        num = int(cfile.stem.split("-")[1].split(".")[0])
+        f = workspace.chapter_export_path(work, num, style, language)
+        if not f.is_file():
+            continue  # chapter export failed/absent for this language — skip, don't mix
+        src = (yaml.safe_load(cfile.read_text(encoding="utf-8")) or {}).get("source", {})
         title = src.get("chapter_title") or src.get("chapter_id") or f"Chapter {num}"
         md = f.read_text(encoding="utf-8")
         if not cite:
             md = exp.strip_citations(md)
         chapters.append((num, title, md))
+
+    if not chapters:
+        raise ValueError("no exported chapters to assemble into a book")
 
     book_md = bookmod.combine(chapters, doc_title=input_path.stem)
     pdf_path = book_path(input_path, pages)
