@@ -83,13 +83,13 @@ def test_export_links_citations_to_anchored_notes():
     md = study_document(_cset(), client=_FakeClient(body), model="m")["markdown"]
     assert "[s-1](#note-s-1), [s-2](#note-s-2)" in md             # citations become links
     assert '<a id="note-s-1"></a>' in md                         # anchored appendix entry
-    assert "— p.3 (body)" in md                                   # verbatim evidence + page
+    assert "— page 3 (body)" in md                                # verbatim evidence + page
 
 
 def test_export_cites_page_as_plain_text():
     body = "## S\n- point [s-1]"
     md = study_document(_cset(), client=_FakeClient(body), model="m")["markdown"]
-    assert "— p.3 (body)" in md   # plain-text page citation (printed label)
+    assert "— page 3 (body)" in md   # plain-text page citation (printed label)
     assert "#page=" not in md      # no fragile cross-PDF link
     assert "](../" not in md        # no source-file link
 
@@ -231,7 +231,7 @@ def _appendix_body() -> str:
         "s-1": "překlad shrnutí",          # statement summary
         "label:claim": "tvrzení",           # basis kind
         "label:body": "tělo",               # source kind
-        "label:p.": "s.",                   # page word abbreviation
+        "label:page": "strana",             # page word (spelled out)
     })
 
 
@@ -243,7 +243,8 @@ def test_gloss_rendered_under_quote_when_translating():
     client = _ScriptedClient(synth, gloss, _appendix_body())
     md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
     assert "The king customarily had several wives" in md      # original quote untouched
-    assert "_translation: Král měl několik manželek_" in md    # gloss beneath, italic + labelled
+    assert ">\n> _Král měl několik manželek_" in md            # gloss in its own block, italic, no label (#150)
+    assert "translation:" not in md                            # English label word dropped entirely (#150)
     assert len(client.calls) == 3                              # synthesis + gloss + appendix
 
 
@@ -286,10 +287,10 @@ def test_appendix_summaries_and_labels_render_in_target_language():
         model="m", language="cs",
     )["markdown"]
     assert "_tvrzení_ — překlad shrnutí" in md                 # basis kind + summary translated
-    assert "— s.3 (tělo)" in md                                # page word + source kind translated
-    assert "p.3 (body)" not in md                              # English chrome NOT present
+    assert "— strana 3 (tělo)" in md                           # page word + source kind translated
+    assert "page 3 (body)" not in md                           # English chrome NOT present
     assert "The king customarily had several wives" in md      # verbatim excerpt untouched
-    assert "_translation: Král měl několik manželek_" in md    # gloss beneath
+    assert ">\n> _Král měl několik manželek_" in md            # gloss in its own block, italic, no label (#150)
 
 
 def test_appendix_only_translates_cited_statements_and_their_labels():
@@ -300,7 +301,7 @@ def test_appendix_only_translates_cited_statements_and_their_labels():
     appendix_call = client.calls[2]["messages"][0]["content"]
     assert "s-1" in appendix_call                              # cited summary sent
     assert "label:claim" in appendix_call and "label:body" in appendix_call
-    assert "label:p." in appendix_call                         # page word sent
+    assert "label:page" in appendix_call                       # page word sent
     assert '"s-2"' not in appendix_call                        # uncited statement not sent
 
 
@@ -310,7 +311,7 @@ def test_appendix_falls_back_to_source_when_translation_absent():
     client = _ScriptedClient(synth, _structured({"e-1": "x"}), _structured({}))  # empty appendix map
     md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
     assert "_claim_ — a" in md                                 # original summary + basis kept
-    assert "— p.3 (body)" in md                                # original chrome kept
+    assert "— page 3 (body)" in md                             # original chrome kept
 
 
 def test_no_gloss_on_english_or_none_path():
@@ -318,7 +319,7 @@ def test_no_gloss_on_english_or_none_path():
     for lang in (None, "en", "English"):
         client = _ScriptedClient("## S\n- point [s-1]")
         md = study_document(_cset(), client=client, model="m", language=lang)["markdown"]
-        assert "_translation:" not in md, lang
+        assert ">\n>" not in md, lang                          # no blank-line gloss block (#150)
         assert len(client.calls) == 1, lang                    # synthesis only, no extra calls
 
 
@@ -341,8 +342,7 @@ def test_gloss_absent_from_clean_reading_copy():
         model="m", language="cs",
     )["markdown"]
     clean = strip_citations(md)
-    assert "_translation:" not in clean
-    assert "Král měl několik manželek" not in clean
+    assert "Král měl několik manželek" not in clean             # translated gloss gone with appendix
     assert "Notes & Sources" not in clean
 
 
@@ -397,7 +397,7 @@ def test_gloss_echoing_source_is_dropped():
         _cset(), client=_ScriptedClient(synth, echo, _appendix_body()),
         model="m", language="cs",
     )["markdown"]
-    assert "_translation:" not in md
+    assert ">\n>" not in md                                     # echo dropped → no gloss block (#150)
 
 
 def _cset_n_cited(n: int) -> dict:
@@ -484,7 +484,7 @@ def test_large_cited_set_translates_every_entry_across_multiple_batches():
 
     # every cited excerpt got a gloss line (no source-language fallback)
     for i in range(1, n + 1):
-        assert f"_translation: TR e-{i}_" in md, i
+        assert f"> _TR e-{i}_" in md, i
     # and every cited summary rendered translated
     for i in range(1, n + 1):
         assert f"— TR s-{i}" in md, i
@@ -515,8 +515,8 @@ def test_transiently_failed_batch_recovers_via_retry_without_warning():
 
     assert warnings == []                                         # recovered → no warning
     # both the first-batch ids and the once-failed batch's ids translated in full
-    assert "_translation: TR e-1_" in md
-    assert f"_translation: TR e-{n}_" in md                       # last id recovered on retry
+    assert "> _TR e-1_" in md
+    assert f"> _TR e-{n}_" in md                                  # last id recovered on retry
     assert md                                                     # produced a document (no crash)
 
 
@@ -534,7 +534,7 @@ def test_always_failing_batches_warn_and_fall_back_per_key_without_looping():
     md = study_document(cset, client=client, model="m", language="cs", warn=warnings.append)["markdown"]
 
     assert any("translation incomplete" in w for w in warnings)  # surfaced, not silent
-    assert "_translation:" not in md                             # nothing recovered → no gloss line
+    assert ">\n>" not in md                                      # nothing recovered → no gloss block
     assert f"verbatim source quote number {n}" in md             # original quote shown (fallback)
     assert md                                                     # bounded retries, no crash
 
@@ -594,7 +594,7 @@ def test_flaky_bulk_batch_recovers_fully_via_sub_chunk_retry():
     md = study_document(cset, client=client, model="m", language="cs", warn=warnings.append)["markdown"]
 
     for i in range(1, n + 1):
-        assert f"_translation: TR e-{i}_" in md, i               # every gloss recovered
+        assert f"> _TR e-{i}_" in md, i                          # every gloss recovered
         assert f"— TR s-{i}" in md, i                            # every summary recovered
     assert warnings == []                                        # full recovery → no warning
 
@@ -654,7 +654,7 @@ def test_strip_citations_removes_inline_cites_and_appendix():
         "- A nested point [s-3](#note-s-3)\n"
         "  - deeper still [s-4]\n"
         "\n---\n## Notes & Sources\n\n"
-        "<a id=\"note-s-1\"></a>\n**[s-1]** _claim_ — text\n> quote\n> — p.3 (body)\n"
+        "<a id=\"note-s-1\"></a>\n**[s-1]** _claim_ — text\n> quote\n> — page 3 (body)\n"
     )
     out = strip_citations(md)
     assert "[s-" not in out                      # no citation tokens anywhere
