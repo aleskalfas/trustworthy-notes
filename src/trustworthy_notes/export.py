@@ -72,9 +72,35 @@ _GLOSS_SYSTEM = (
     "You translate short verbatim source quotations into a target language as a READING "
     "AID. You are NOT extracting or judging evidence — you only render each quote's "
     "meaning in the target language. Translate faithfully and literally; do not add, omit, "
-    "explain, or interpret. Return ONLY a JSON object mapping each given id to its "
-    "translation string, nothing else."
+    "explain, or interpret. Return each given id together with its translation string."
 )
+
+
+# Structured-output schema for a translation call (#146). JSON-schema structured outputs
+# forbid open/dynamic keys (`additionalProperties` must be false), so the result can't be a
+# dynamic-key `{id: translation}` object; we ask for a FIXED list of {id, translation} pairs
+# and rebuild the map in code. The API then returns schema-validated, properly-escaped JSON,
+# which fixes the intermittent unescaped-quote parse failure of free-text JSON (a translated
+# value containing a `"` used to break `json.loads`, falling the entry to the source language).
+_TRANSLATION_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "translations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "translation": {"type": "string"},
+                },
+                "required": ["id", "translation"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["translations"],
+    "additionalProperties": False,
+}
 
 
 # Per-call cap on how many id -> text entries one translation request carries (#132).
@@ -86,8 +112,8 @@ _GLOSS_SYSTEM = (
 _TRANSLATE_BATCH_SIZE = 25
 
 # Floor for the retry-in-smaller-sub-chunks recovery (#141). A flaky bulk call can come
-# back unusable (entries unchanged, or not-quite-JSON) for a whole batch; rather than
-# falling that batch's ids straight to the source language, we retry the still-missing
+# back unusable (entries unchanged, blank, or the call raising) for a whole batch; rather
+# than falling that batch's ids straight to the source language, we retry the still-missing
 # ids in progressively smaller sub-chunks (halving each round). We stop halving at this
 # floor so the work stays bounded — below it the extra calls cost more than they recover.
 _TRANSLATE_MIN_BATCH = 5
@@ -100,26 +126,28 @@ def _translate_batch(
     """One model call translating ``items`` (already a single batch). Returns the kept
     id -> translation map for this batch — ids we asked about whose translation is
     non-blank and actually DIFFERS from the source (an echo adds no value). May raise if
-    the call itself fails; the caller decides how to surface that. A blank/unparseable
-    body is not an error here — it just yields {} (the retry / per-key fallback applies).
+    the call itself fails; the caller decides how to surface that. A blank/unusable body is
+    not an error here — it just yields {} (the retry / per-key fallback applies).
 
-    The body is parsed TOLERANTLY (``_parse_gloss_json``, #141): a response wrapped in a
-    ```json fence or carrying leading/trailing prose still parses, so a recoverable answer
-    is not discarded as unusable. The keep-if-differs filter is unchanged."""
-    output_config: dict = {}
+    The call uses structured outputs (#146): ``_TRANSLATION_SCHEMA`` constrains the response
+    to schema-validated, properly-escaped JSON — a fixed ``{"translations": [{"id", ...}]}``
+    list of pairs (open keys are disallowed). We parse it with ``json.loads`` (now guaranteed
+    valid even when a translation contains a quote character) and rebuild the id -> translation
+    map. The keep-if-differs filter is unchanged."""
+    output_config: dict = {"format": {"type": "json_schema", "schema": _TRANSLATION_SCHEMA}}
     if effort:
         output_config["effort"] = effort
     with client.messages.stream(
         model=model, max_tokens=max_tokens, thinking={"type": "adaptive"},
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": instruction}],
-        **({"output_config": output_config} if output_config else {}),
+        output_config=output_config,
     ) as stream:
         response = stream.get_final_message()
     body = next((b.text for b in response.content if b.type == "text"), None)
     if not body:
         return {}
-    parsed = _parse_gloss_json(body)
+    parsed = _parse_translations(body)
     return {
         k: v.strip()
         for k, v in parsed.items()
@@ -159,8 +187,8 @@ def _translate_chunk(
 
     Returns the kept id -> translation map (entries that differ from the source); ids that
     never came back are simply absent — the caller decides how to surface that. A call that
-    returns its entries unchanged, returns not-quite-JSON, or RAISES leaves its ids missing,
-    so a transient bulk-call failure still has a path to recover.
+    returns its entries unchanged, omits ids, or RAISES leaves those ids missing, so a
+    transient bulk-call failure still has a path to recover.
 
     Bounded descent: start at ``chunk_size`` and, while ids remain missing, HALVE the size
     and re-attempt only those ids. The loop stops on the first of three conditions — no ids
@@ -207,9 +235,9 @@ def _translate_map(
     avoids the truncated / partial JSON that an oversized single call produced, which used
     to silently fall the whole appendix back to the source language (#132).
 
-    A flaky chunk — one that RAISES, returns its entries unchanged, or returns not-quite-
-    JSON — used to fall its whole batch back to the source language (#141: in a Czech book,
-    later notes' bold summaries stayed English while their labels were Czech). Now such a
+    A flaky chunk — one that RAISES, returns its entries unchanged, or omits ids — used to
+    fall its whole batch back to the source language (#141: in a Czech book, later notes'
+    bold summaries stayed English while their labels were Czech). Now such a
     chunk is RETRIED in smaller sub-chunks (``_translate_chunk``, halving down to
     ``_TRANSLATE_MIN_BATCH``) and anything recovered is merged. Only the ids that remain
     untranslated AFTER retries are surfaced via ``warn`` (one line) and fall back per-key to
@@ -259,9 +287,9 @@ def _translate_excerpts(
     def build_instruction(batch: dict[str, str]) -> str:
         payload = json.dumps(batch, ensure_ascii=False)
         return (
-            f"Translate each quotation below into {language}. Keep the SAME json keys (the "
-            f"ids); the value of each is the {language} translation of that quotation. "
-            f"Return ONLY the json object.\n\nQUOTES (json id -> source text):\n{payload}"
+            f"Translate each quotation below into {language}. For every id, return that same id "
+            f"with the {language} translation of its quotation.\n\n"
+            f"QUOTES (json id -> source text):\n{payload}"
         )
 
     return _translate_map(
@@ -282,7 +310,7 @@ _APPENDIX_SYSTEM = (
     "study-document appendix. You are NOT extracting or judging evidence and you NEVER see "
     "or translate any verbatim source quotation — only the note summaries and labels given "
     "to you. Translate faithfully and literally; do not add, omit, explain, or interpret. "
-    "Return ONLY a JSON object mapping each given id to its translation string, nothing else."
+    "Return each given id together with its translation string."
 )
 
 # Sentinel ids for the fixed chrome labels, sent in the SAME appendix-translation call as
@@ -317,9 +345,9 @@ def _translate_appendix(
 
     def build_instruction(batch: dict[str, str]) -> str:
         return (
-            f"Translate each value below into {language}. Keep the SAME json keys; the value of "
-            f"each is its {language} translation. Keys starting with `label:` are short fixed UI "
-            f"words — translate just the word. Return ONLY the json object.\n\n"
+            f"Translate each value below into {language}. For every id, return that same id with "
+            f"the {language} translation of its value. Ids starting with `label:` are short fixed "
+            f"UI words — translate just the word.\n\n"
             f"TEXT (json id -> source text):\n{json.dumps(batch, ensure_ascii=False)}"
         )
 
@@ -329,21 +357,25 @@ def _translate_appendix(
     )
 
 
-# The gloss pass is asked for raw JSON, but a model may wrap it in a ```json fence or
-# add a sentence; pull the first {...} object out before parsing. A parse failure is
-# non-fatal — the gloss is advisory, so we return {} and render the originals alone.
-_JSON_OBJECT = re.compile(r"\{.*\}", re.S)
+def _parse_translations(body: str) -> dict:
+    """Rebuild the id -> translation map from a structured-output body (#146).
 
-
-def _parse_gloss_json(body: str) -> dict:
-    m = _JSON_OBJECT.search(body)
-    if not m:
-        return {}
+    ``body`` is the text block of a structured-output call, so it is guaranteed valid JSON
+    in the ``_TRANSLATION_SCHEMA`` shape — a ``{"translations": [{"id", "translation"}, ...]}``
+    list of pairs. We rebuild the dynamic-key map the rest of the pipeline expects. A parse
+    failure is non-fatal — the gloss is advisory, so we return {} and the caller renders the
+    originals alone (the retry / per-key fallback applies)."""
     try:
-        data = json.loads(m.group(0))
+        data = json.loads(body)
     except (ValueError, TypeError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        pair["id"]: pair["translation"]
+        for pair in data.get("translations", [])
+        if isinstance(pair, dict) and isinstance(pair.get("id"), str)
+    }
 
 
 _STYLES = {
