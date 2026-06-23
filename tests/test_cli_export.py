@@ -67,3 +67,23 @@ def test_export_defaults_to_english_when_unset(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "get_language", lambda: None)
     seen = _run(tmp_path, monkeypatch, [])
     assert seen["language"] == config.DEFAULT_LANGUAGE
+
+
+def test_export_writes_language_aware_filename(tmp_path, monkeypatch):
+    # #127 scope edge: the standalone `export` writes the language-aware file via
+    # workspace.chapter_export_path — `--language cs` writes chapter-006.outline.cs.md,
+    # and the English run writes the bare chapter-006.outline.md, never colliding.
+    _stub_synthesis(monkeypatch, {})
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    work = workspace.work_dir(src)
+    _seed_chapter(work)
+
+    assert runner.invoke(cli.app, ["export", str(src), "--all"]).exit_code == 0
+    assert runner.invoke(cli.app, ["export", str(src), "--all", "--language", "cs"]).exit_code == 0
+
+    en = workspace.chapter_export_path(work, 6, "outline", None)
+    cs = workspace.chapter_export_path(work, 6, "outline", "cs")
+    assert en.name == "chapter-006.outline.md"
+    assert cs.name == "chapter-006.outline.cs.md"
+    assert en.is_file() and cs.is_file()   # both written; the cs run did not overwrite English

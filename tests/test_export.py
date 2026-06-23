@@ -189,23 +189,38 @@ class _ScriptedClient:
         self.messages = SimpleNamespace(stream=_stream)
 
 
+# When translating, study_document makes THREE model calls in this order: synthesis,
+# the excerpt gloss, then the Notes & Sources appendix text + labels (#128). A scripted
+# client must queue a body for each; an empty appendix body leaves the appendix in the
+# source language (the fallback path). This default exercises the gloss without asserting
+# on appendix translation.
+def _appendix_body() -> str:
+    """A stock appendix-translation JSON: the cited summary + the labels in 'cs'."""
+    return json.dumps({
+        "s-1": "překlad shrnutí",          # statement summary
+        "label:claim": "tvrzení",           # basis kind
+        "label:body": "tělo",               # source kind
+        "label:p.": "s.",                   # page word abbreviation
+    })
+
+
 def test_gloss_rendered_under_quote_when_translating():
     # #116: a non-English target produces a reading-aid translation for the CITED
     # excerpts and renders it beneath the original quote in the cited copy.
     synth = "## S\n- point [s-1]"
     gloss = json.dumps({"e-1": "Král měl několik manželek"})
-    client = _ScriptedClient(synth, gloss)
+    client = _ScriptedClient(synth, gloss, _appendix_body())
     md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
     assert "The king customarily had several wives" in md      # original quote untouched
     assert "_translation: Král měl několik manželek_" in md    # gloss beneath, italic + labelled
-    assert len(client.calls) == 2                              # synthesis + one gloss pass
+    assert len(client.calls) == 3                              # synthesis + gloss + appendix
 
 
 def test_gloss_only_covers_cited_excerpts_not_every_extracted():
     # cost bound (ADR-008): only excerpts the cited notes surface are sent to translate.
     # Here only s-1 (→ e-1) is cited, so e-2 is never offered for translation.
     synth = "## S\n- point [s-1]"
-    client = _ScriptedClient(synth, json.dumps({"e-1": "x"}))
+    client = _ScriptedClient(synth, json.dumps({"e-1": "x"}), _appendix_body())
     study_document(_cset(), client=client, model="m", language="cs")
     gloss_call = client.calls[1]["messages"][0]["content"]
     assert "e-1" in gloss_call
@@ -213,13 +228,60 @@ def test_gloss_only_covers_cited_excerpts_not_every_extracted():
     assert "the small-scale portrayal of the wife" not in gloss_call
 
 
+def test_appendix_summaries_and_labels_render_in_target_language():
+    # #128: the appendix's Layer-A note text (statement summary) and its chrome labels
+    # (basis kind, source kind, page word) render in the target language; the verbatim
+    # excerpt is unchanged with its gloss beneath.
+    synth = "## S\n- point [s-1]"
+    gloss = json.dumps({"e-1": "Král měl několik manželek"})
+    md = study_document(
+        _cset(), client=_ScriptedClient(synth, gloss, _appendix_body()),
+        model="m", language="cs",
+    )["markdown"]
+    assert "_tvrzení_ — překlad shrnutí" in md                 # basis kind + summary translated
+    assert "— s.3 (tělo)" in md                                # page word + source kind translated
+    assert "p.3 (body)" not in md                              # English chrome NOT present
+    assert "The king customarily had several wives" in md      # verbatim excerpt untouched
+    assert "_translation: Král měl několik manželek_" in md    # gloss beneath
+
+
+def test_appendix_only_translates_cited_statements_and_their_labels():
+    # cost bound: only the CITED statement summary (s-1) and the labels it uses are sent.
+    synth = "## S\n- point [s-1]"
+    client = _ScriptedClient(synth, json.dumps({"e-1": "x"}), _appendix_body())
+    study_document(_cset(), client=client, model="m", language="cs")
+    appendix_call = client.calls[2]["messages"][0]["content"]
+    assert "s-1" in appendix_call                              # cited summary sent
+    assert "label:claim" in appendix_call and "label:body" in appendix_call
+    assert "label:p." in appendix_call                         # page word sent
+    assert '"s-2"' not in appendix_call                        # uncited statement not sent
+
+
+def test_appendix_falls_back_to_source_when_translation_absent():
+    # a key the model omits (or a blank/echo) falls back to the original — never an error.
+    synth = "## S\n- point [s-1]"
+    client = _ScriptedClient(synth, json.dumps({"e-1": "x"}), json.dumps({}))  # empty appendix map
+    md = study_document(_cset(), client=client, model="m", language="cs")["markdown"]
+    assert "_claim_ — a" in md                                 # original summary + basis kept
+    assert "— p.3 (body)" in md                                # original chrome kept
+
+
 def test_no_gloss_on_english_or_none_path():
-    # native/English output → no translation pass at all (no gloss, single model call).
+    # native/English output → no translation pass at all (no gloss/appendix, single call).
     for lang in (None, "en", "English"):
         client = _ScriptedClient("## S\n- point [s-1]")
         md = study_document(_cset(), client=client, model="m", language=lang)["markdown"]
         assert "_translation:" not in md, lang
-        assert len(client.calls) == 1, lang                    # synthesis only, no gloss call
+        assert len(client.calls) == 1, lang                    # synthesis only, no extra calls
+
+
+def test_appendix_byte_for_byte_unchanged_on_english_path():
+    # #128 regression guard: the English/None path renders the appendix exactly as before.
+    body = "## S\n- point [s-1]\n- other [s-2]"
+    en = study_document(_cset(), client=_FakeClient(body), model="m")["markdown"]
+    for lang in (None, "", "en", "en-US", "English"):
+        out = study_document(_cset(), client=_FakeClient(body), model="m", language=lang)["markdown"]
+        assert out == en, lang
 
 
 def test_gloss_absent_from_clean_reading_copy():
@@ -227,7 +289,10 @@ def test_gloss_absent_from_clean_reading_copy():
     from trustworthy_notes.export import strip_citations
     synth = "## S\n- point [s-1]"
     gloss = json.dumps({"e-1": "Král měl několik manželek"})
-    md = study_document(_cset(), client=_ScriptedClient(synth, gloss), model="m", language="cs")["markdown"]
+    md = study_document(
+        _cset(), client=_ScriptedClient(synth, gloss, _appendix_body()),
+        model="m", language="cs",
+    )["markdown"]
     clean = strip_citations(md)
     assert "_translation:" not in clean
     assert "Král měl několik manželek" not in clean
@@ -243,17 +308,48 @@ def test_gloss_never_mutates_the_anchored_excerpt():
     before = [e["excerpt"] for e in cset["evidence"]]
     synth = "## S\n- point [s-1]"
     gloss = json.dumps({"e-1": "Král měl několik manželek"})
-    study_document(cset, client=_ScriptedClient(synth, gloss), model="m", language="cs")
+    study_document(cset, client=_ScriptedClient(synth, gloss, _appendix_body()), model="m", language="cs")
     after = [e["excerpt"] for e in cset["evidence"]]
     assert after == before                                     # anchored excerpt untouched
     assert all("excerpt_translation" not in e for e in cset["evidence"])  # not written back in
+
+
+def test_anchor_checks_ignore_translated_appendix_text():
+    # ADR-008 invariant: the §7 anchor reads the verbatim `excerpt` only — never the
+    # translated summary, labels, or gloss. Translate fully, then assert traceability
+    # still resolves the original excerpts against their source pages.
+    from trustworthy_notes.export import study_document as _sd
+    from trustworthy_notes.validation import check_traceability
+    from trustworthy_notes.normalize import quote_is_anchored
+
+    cset = _cset()
+    synth = "## S\n- point [s-1, s-2]"
+    gloss = json.dumps({"e-1": "Král měl několik manželek", "e-2": "malé vyobrazení manželky"})
+    _sd(cset, client=_ScriptedClient(synth, gloss, _appendix_body()), model="m", language="cs")
+
+    # The source "pages": the body stream must contain each verbatim excerpt. The
+    # translated appendix text is NOT in these pages, so if any check read it, it'd fail.
+    page13 = SimpleNamespace(
+        page_index=13, text="The king customarily had several wives in the Old Kingdom.", footnotes=""
+    )
+    page14 = SimpleNamespace(
+        page_index=14, text="Note the small-scale portrayal of the wife here.", footnotes=""
+    )
+    problems = check_traceability(cset, [page13, page14])
+    assert problems == []                                      # original excerpts anchor fine
+    # and the anchor function itself reads only the verbatim quote, not any translation
+    assert quote_is_anchored("The king customarily had several wives in the Old Kingdom", page13.text)
+    assert not quote_is_anchored("Král měl několik manželek", page13.text)  # translation never anchors
 
 
 def test_gloss_echoing_source_is_dropped():
     # a model that just echoes the source text back adds no reading value → not rendered.
     synth = "## S\n- point [s-1]"
     echo = json.dumps({"e-1": "The king customarily had several wives in the Old Kingdom"})
-    md = study_document(_cset(), client=_ScriptedClient(synth, echo), model="m", language="cs")["markdown"]
+    md = study_document(
+        _cset(), client=_ScriptedClient(synth, echo, _appendix_body()),
+        model="m", language="cs",
+    )["markdown"]
     assert "_translation:" not in md
 
 

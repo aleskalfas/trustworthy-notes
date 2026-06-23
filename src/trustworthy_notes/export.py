@@ -77,36 +77,30 @@ _GLOSS_SYSTEM = (
 )
 
 
-def _translate_excerpts(
-    excerpts: dict[str, str], language: str, *,
+def _translate_map(
+    items: dict[str, str], language: str, *, system: str, instruction: str,
     client: "anthropic.Anthropic", model: str, effort: str = "low", max_tokens: int = 2000,
 ) -> dict[str, str]:
-    """Translate cited source excerpts into ``language`` for the reading-aid gloss.
+    """Translate a small id -> source-text map into ``language`` in one model pass.
 
-    ``excerpts`` maps evidence-id -> verbatim ``excerpt`` for the CITED evidence only
-    (cost-bounded: a study document surfaces a small subset of all extracted evidence,
-    and ADR-008 produces the gloss for those alone). Returns evidence-id -> translation
-    for the ids the model returned; ids it omits or returns blank are simply skipped
-    (the appendix then renders the original quote with no gloss line — never an error).
-
-    This is a SEPARATE pass over the original quotes; it never mutates ``excerpt`` and
-    its output never enters a §7 check. The model seam is the same injectable
-    ``client``/``model`` the synthesis uses, so it is testable without a network call.
+    The shared core behind both reading-layer translation passes (ADR-008): the
+    excerpt gloss and the Notes & Sources appendix text. ``items`` maps an id to the
+    source string to translate; ``system``/``instruction`` are the caller's prompt.
+    Returns id -> translation for the ids the model returned, keeping only ids we
+    asked about with a non-blank translation that actually DIFFERS from the original
+    (a model echoing the source back adds no value); omitted/blank ids are simply
+    skipped, never an error. This never re-reads the source page and its output never
+    enters a §7 check. The model seam is the same injectable ``client``/``model`` the
+    synthesis uses, so it is testable without a network call.
     """
-    if not excerpts:
+    if not items:
         return {}
-    payload = json.dumps(excerpts, ensure_ascii=False)
-    instruction = (
-        f"Translate each quotation below into {language}. Keep the SAME json keys (the "
-        f"ids); the value of each is the {language} translation of that quotation. "
-        f"Return ONLY the json object.\n\nQUOTES (json id -> source text):\n{payload}"
-    )
     output_config: dict = {}
     if effort:
         output_config["effort"] = effort
     with client.messages.stream(
         model=model, max_tokens=max_tokens, thinking={"type": "adaptive"},
-        system=[{"type": "text", "text": _GLOSS_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": instruction}],
         **({"output_config": output_config} if output_config else {}),
     ) as stream:
@@ -115,13 +109,92 @@ def _translate_excerpts(
     if not body:
         return {}
     parsed = _parse_gloss_json(body)
-    # Keep only ids we asked about, with a non-blank translation that actually differs
-    # from the original (a model echoing the source text back adds no reading value).
     return {
-        eid: t.strip()
-        for eid, t in parsed.items()
-        if eid in excerpts and isinstance(t, str) and t.strip() and t.strip() != excerpts[eid].strip()
+        k: v.strip()
+        for k, v in parsed.items()
+        if k in items and isinstance(v, str) and v.strip() and v.strip() != items[k].strip()
     }
+
+
+def _translate_excerpts(
+    excerpts: dict[str, str], language: str, *,
+    client: "anthropic.Anthropic", model: str, effort: str = "low", max_tokens: int = 2000,
+) -> dict[str, str]:
+    """Translate cited source excerpts into ``language`` for the reading-aid gloss.
+
+    ``excerpts`` maps evidence-id -> verbatim ``excerpt`` for the CITED evidence only
+    (cost-bounded: a study document surfaces a small subset of all extracted evidence,
+    and ADR-008 produces the gloss for those alone). Returns evidence-id -> translation;
+    ids the model omits or returns blank are simply skipped (the appendix then renders
+    the original quote with no gloss line — never an error).
+
+    This is a SEPARATE pass over the original quotes; it never mutates ``excerpt`` and
+    its output never enters a §7 check.
+    """
+    payload = json.dumps(excerpts, ensure_ascii=False)
+    instruction = (
+        f"Translate each quotation below into {language}. Keep the SAME json keys (the "
+        f"ids); the value of each is the {language} translation of that quotation. "
+        f"Return ONLY the json object.\n\nQUOTES (json id -> source text):\n{payload}"
+    )
+    return _translate_map(
+        excerpts, language, system=_GLOSS_SYSTEM, instruction=instruction,
+        client=client, model=model, effort=effort, max_tokens=max_tokens,
+    )
+
+
+# The Notes & Sources appendix renders Layer-A note text (the statement summaries) and
+# a small fixed set of chrome labels (basis kinds like `claim`/`reported`, source kinds
+# `body`/`footnote`, and the `p.` page-label word). When the reader asked for a target
+# language these render in that language too (issue #128) — a re-representation of notes
+# already anchored, exactly the faithfulness-neutral seam ADR-008 draws. The VERBATIM
+# excerpt, the page number, the locator, and the `[s-N]` ids are NOT here and are never
+# translated; this pass touches only the note text and the labels.
+_APPENDIX_SYSTEM = (
+    "You translate short note text and a few fixed UI labels into a target language for a "
+    "study-document appendix. You are NOT extracting or judging evidence and you NEVER see "
+    "or translate any verbatim source quotation — only the note summaries and labels given "
+    "to you. Translate faithfully and literally; do not add, omit, explain, or interpret. "
+    "Return ONLY a JSON object mapping each given id to its translation string, nothing else."
+)
+
+# Sentinel ids for the fixed chrome labels, sent in the SAME appendix-translation call as
+# the statement summaries. The `label:` prefix can't collide with a statement id (`s-…`),
+# so one returned JSON map carries both. The page-label token is the reader-visible `p.`
+# abbreviation (sent and rendered as one unit, so English stays exactly `p.<page>`); a
+# target language translates the abbreviation in place (e.g. `s.` in German).
+_PAGE_WORD = "p."
+_LABEL_PREFIX = "label:"
+
+
+def _translate_appendix(
+    summaries: dict[str, str], labels: set[str], language: str, *,
+    client: "anthropic.Anthropic", model: str, effort: str = "low", max_tokens: int = 2000,
+) -> dict[str, str]:
+    """Translate the cited appendix text — statement summaries + chrome labels — in one pass.
+
+    ``summaries`` maps statement-id -> the Layer-A note ``text`` for the CITED statements
+    only (cost-bounded, like the gloss). ``labels`` is the small fixed set of chrome words
+    actually used by the cited set (basis kinds, source kinds, plus the page-label word),
+    each sent under a ``label:<word>`` sentinel id so one JSON map carries both. Returns a
+    dict keyed by statement-id (translated summary) and by ``label:<word>`` (translated
+    label); a missing key falls back to the original at render time — never an error.
+
+    A SEPARATE reading-layer pass; it never re-reads the source and its output never enters
+    a §7 check. The verbatim excerpt is not in ``items`` and is never touched (ADR-008)."""
+    items = dict(summaries)
+    for word in labels:
+        items[f"{_LABEL_PREFIX}{word}"] = word
+    instruction = (
+        f"Translate each value below into {language}. Keep the SAME json keys; the value of "
+        f"each is its {language} translation. Keys starting with `label:` are short fixed UI "
+        f"words — translate just the word. Return ONLY the json object.\n\n"
+        f"TEXT (json id -> source text):\n{json.dumps(items, ensure_ascii=False)}"
+    )
+    return _translate_map(
+        items, language, system=_APPENDIX_SYSTEM, instruction=instruction,
+        client=client, model=model, effort=effort, max_tokens=max_tokens,
+    )
 
 
 # The gloss pass is asked for raw JSON, but a model may wrap it in a ```json fence or
@@ -226,7 +299,10 @@ def strip_citations(md: str) -> str:
     return md.rstrip() + "\n"
 
 
-def _notes_appendix(cset: dict, cited: set[str], gloss: Optional[dict[str, str]] = None) -> str:
+def _notes_appendix(
+    cset: dict, cited: set[str], gloss: Optional[dict[str, str]] = None,
+    appendix: Optional[dict[str, str]] = None,
+) -> str:
     """Anchored 'Notes & Sources' entries for each cited note: the note text plus its
     verbatim evidence and printed-page citation — the click-through target for every
     ``[s-N]``. The page is a plain-text citation (a clickable jump into the *separate*
@@ -235,19 +311,33 @@ def _notes_appendix(cset: dict, cited: set[str], gloss: Optional[dict[str, str]]
     ``gloss`` (evidence-id -> reading-aid translation) is rendered as a visually
     distinct line BENEATH the original quote, never replacing it (ADR-008). It prefers
     an in-record ``excerpt_translation`` (carried through compose) and falls back to a
-    freshly-produced map; absent for an evidence id, only the original quote shows. The
-    quote itself is always the source's verbatim words — the gloss is help, not the
-    anchor, and is shown only in this cited copy (the clean reading copy strips the
-    whole appendix, so it never appears there)."""
+    freshly-produced map; absent for an evidence id, only the original quote shows.
+
+    ``appendix`` (issue #128) carries reading-layer translations of the appendix's
+    Layer-A note text and its chrome labels: keyed by statement-id for the translated
+    summary, and by ``label:<word>`` for a translated basis/source-kind/page word. When
+    None (the English/native path) every label and summary renders exactly as before —
+    byte-for-byte unchanged, no regression. A key missing from a non-None map falls back
+    to the original. The VERBATIM excerpt, the page number, the locator, and the
+    ``[s-N]`` id are never in this map and are never translated — the quote stays the
+    source's own words, the sole anchored evidence (ADR-008)."""
     gloss = gloss or {}
+    appendix = appendix or {}
+
+    def label(word: str) -> str:
+        """The target-language label for ``word`` if translated, else the word as-is."""
+        return appendix.get(f"{_LABEL_PREFIX}{word}", word)
+
     ev = {e["id"]: e for e in cset.get("evidence", [])}
     out = ["", "---", "## Notes & Sources", "",
            "Every citation links here; each note shows its verbatim source evidence and printed page."]
     for s in sorted((s for s in cset.get("statements", []) if s["id"] in cited),
                     key=lambda s: (len(s["id"]), s["id"])):
-        b = f", {s['basis']}" if s.get("basis") else ""
+        kind = label(s["type"])
+        b = f", {label(s['basis'])}" if s.get("basis") else ""
+        summary = appendix.get(s["id"], s.get("text", ""))
         out.append(f'\n<a id="note-{s["id"]}"></a>')
-        out.append(f"**[{s['id']}]** _{s['type']}{b}_ — {s.get('text', '')}")
+        out.append(f"**[{s['id']}]** _{kind}{b}_ — {summary}")
         for eid in s.get("evidence", []):
             e = ev.get(eid)
             if not e:
@@ -256,7 +346,9 @@ def _notes_appendix(cset: dict, cited: set[str], gloss: Optional[dict[str, str]]
             loc = f", fn {e['locator']}" if e.get("locator") else ""
             q = e.get("excerpt", "")
             q = q if len(q) <= 240 else q[:237] + "…"
-            out.append(f"> {q}  \n> — p.{page}{loc} ({e.get('source', 'body')})")
+            page_word = label(_PAGE_WORD)
+            source_kind = label(e.get("source", "body"))
+            out.append(f"> {q}  \n> — {page_word}{page}{loc} ({source_kind})")
             tr = gloss.get(eid) or e.get("excerpt_translation")
             if tr:
                 tr = tr if len(tr) <= 240 else tr[:237] + "…"
@@ -323,7 +415,14 @@ def study_document(
     # cited notes actually surface — a small subset of all extracted evidence (cost bound).
     # The original `excerpt` is never touched; the gloss renders beneath it and is never
     # anchor-checked. The English/None path produces nothing (`gloss` stays empty).
+    #
+    # The Notes & Sources appendix's own Layer-A text (the cited statement summaries) and
+    # its chrome labels (basis/source kinds + page word) are translated too (issue #128),
+    # in a SEPARATE pass over the notes already in hand — never by re-reading the source.
+    # Both maps stay empty on the English/None path, so the appendix renders byte-for-byte
+    # as before and no extra model call is made.
     gloss: dict[str, str] = {}
+    appendix_tr: dict[str, str] = {}
     if not _is_default_language(language):
         ev_by_id = {e["id"]: e for e in cset.get("evidence", [])}
         cited_excerpts = {
@@ -332,9 +431,28 @@ def study_document(
             for eid in s.get("evidence", [])
             if eid in ev_by_id and ev_by_id[eid].get("excerpt")
         }
-        gloss = _translate_excerpts(
-            cited_excerpts, language, client=client, model=model, effort=effort
-        )
+        if cited_excerpts:
+            gloss = _translate_excerpts(
+                cited_excerpts, language, client=client, model=model, effort=effort
+            )
+
+        # Cited statement summaries + the chrome labels they actually use (basis kinds,
+        # source kinds, page word) — one bounded translation pass over the cited set.
+        cited_statements = [s for s in cset.get("statements", []) if s["id"] in cited]
+        summaries = {s["id"]: s.get("text", "") for s in cited_statements if s.get("text")}
+        labels: set[str] = {_PAGE_WORD}
+        for s in cited_statements:
+            labels.add(s["type"])
+            if s.get("basis"):
+                labels.add(s["basis"])
+            for eid in s.get("evidence", []):
+                e = ev_by_id.get(eid)
+                if e:
+                    labels.add(e.get("source", "body"))
+        if summaries or labels:
+            appendix_tr = _translate_appendix(
+                summaries, labels, language, client=client, model=model, effort=effort
+            )
 
     # drop a model-supplied H1 title; we render our own + meta + TOC
     lines = body.splitlines()
@@ -353,7 +471,7 @@ def study_document(
         f"*{src.get('document', '')} · PDF pages {rng[0]}–{rng[1]}*\n",
         "## Contents", "", toc, "",
         numbered,
-        _notes_appendix(cset, cited, gloss),
+        _notes_appendix(cset, cited, gloss, appendix_tr),
     ]
     if unknown:
         doc.append(f"\n> ⚠ {len(unknown)} citation(s) reference notes not in this chapter "
