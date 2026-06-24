@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 import typer
 from typer.core import TyperGroup
@@ -430,6 +431,21 @@ def config_set_language(
     typer.echo(f"Saved preferred language: {language} ({config.config_file()}).")
 
 
+@config_app.command("set-citations")
+def config_set_citations(
+    value: bool = typer.Argument(
+        ..., help="true to keep citations in books by default, false for a clean reading copy."
+    )
+):
+    """Save the default for whether `tnotes book` keeps citations (#154).
+
+    Resolves at use as: flag > this config value > built-in (on). An explicit
+    `--citations`/`--no-citations` on `tnotes book` always overrides this default.
+    """
+    config.set_book_citations(value)
+    typer.echo(f"Saved default book citations: {value} ({config.config_file()}).")
+
+
 @config_app.command("set-no-update-check")
 def config_set_no_update_check(
     disabled: bool = typer.Argument(
@@ -517,6 +533,10 @@ def config_show():
     language = saved_language or config.DEFAULT_LANGUAGE
     language_src = "config" if saved_language else f"built-in ({config.DEFAULT_LANGUAGE})"
     typer.echo(f"language: {language}  (from {language_src})")
+    saved_citations = config.get_book_citations()
+    book_citations = saved_citations if saved_citations is not None else config.DEFAULT_BOOK_CITATIONS
+    citations_src = "config" if saved_citations is not None else f"built-in ({config.DEFAULT_BOOK_CITATIONS})"
+    typer.echo(f"book citations: {book_citations}  (from {citations_src})")
     repo = config.get_feedback_repo()
     typer.echo(f"feedback repo : {repo or 'not set'}")
     typer.echo(f"feedback token: {'set' if config.get_feedback_token() else 'not set (falls back to local file)'}")
@@ -1069,10 +1089,12 @@ def book(
         True, "--prose-only/--all",
         help="Include only prose chapters (default), or --all to include tables/indexes too.",
     ),
-    no_citations: bool = typer.Option(
-        False, "--no-citations/--citations",
-        help="Strip [s-N] citations and the Notes & Sources appendix for a clean reading copy "
-             "(writes <stem>.tnotes.reading.md/.pdf). Default keeps citations (<stem>.tnotes.md/.pdf).",
+    citations: Optional[bool] = typer.Option(
+        None, "--citations/--no-citations",
+        help="Keep [s-N] citations and the Notes & Sources appendix (the cited "
+             "<stem>.tnotes.md/.pdf), or --no-citations for a clean reading copy "
+             "(<stem>.tnotes.reading.md/.pdf). Resolves: this flag > `book_citations:` in "
+             "config > built-in (on). Set the default with `tnotes config set-citations`.",
     ),
     language: str = typer.Option(
         None, "--language", "-l",
@@ -1090,7 +1112,10 @@ def book(
     from the composed notes-sets. Prose chapters only by default (--all to include
     reference sections). With --no-citations, also drops the [s-N] markers and Notes
     & Sources for a clean read-through (<stem>.tnotes.reading.*), leaving the cited
-    <stem>.tnotes.* as the authority.
+    <stem>.tnotes.* as the authority. Whether citations are kept by default is
+    configurable: this flag > `book_citations:` in config > built-in (on). Flip the
+    default with `tnotes config set-citations false` for a clean reading copy without
+    typing --no-citations every run.
 
     `--language` selects which exported chapters to combine: the English/native book
     is built from chapter-NNN.<style>.md, a `--language cs` book from the .cs.md
@@ -1099,6 +1124,8 @@ def book(
     """
     from . import book as bookmod, compose, export as exp, pdf as pdfmod
 
+    keep_citations = config.resolve_book_citations(citations)
+    no_citations = not keep_citations
     language = config.resolve_language(language)
     notes_dir = workspace.work_dir(input, notes_dir)
 

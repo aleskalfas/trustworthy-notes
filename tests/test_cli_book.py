@@ -73,6 +73,75 @@ def test_book_writes_beside_source_named_after_it(tmp_path, monkeypatch):
     assert not (workspace.export_dir(notes_dir) / "book.md").exists()
 
 
+def test_book_cited_by_default_when_no_flag_no_config(tmp_path, monkeypatch):
+    # #154: nothing configured + no flag → the built-in default (citations on), so the
+    # cited <stem>.tnotes.* is written and no .reading copy is produced.
+    from trustworthy_notes import pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    _seed_chapter(notes_dir, 6, "Background")
+
+    res = runner.invoke(cli.app, ["book", str(src)])
+    assert res.exit_code == 0, res.stdout
+
+    assert (tmp_path / "Foo-2506.tnotes.md").is_file()
+    assert not (tmp_path / "Foo-2506.tnotes.reading.md").exists()
+
+
+def test_book_config_false_makes_reading_copy_the_default(tmp_path, monkeypatch):
+    # #154: with book_citations set to False in config and no flag, the default flips
+    # to a clean reading copy (<stem>.tnotes.reading.*); the cited copy is not written.
+    from trustworthy_notes import config, pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+    config.set_book_citations(False)
+
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    _seed_chapter(notes_dir, 6, "Background")
+
+    res = runner.invoke(cli.app, ["book", str(src)])
+    assert res.exit_code == 0, res.stdout
+
+    assert (tmp_path / "Foo-2506.tnotes.reading.md").is_file()
+    assert not (tmp_path / "Foo-2506.tnotes.md").exists()
+
+
+def test_book_citations_flag_overrides_config(tmp_path, monkeypatch):
+    # #154: an explicit --citations beats a config default of False (the cited copy is
+    # produced), and --no-citations beats a config default of True (the reading copy is).
+    from trustworthy_notes import config, pdf as pdfmod
+
+    monkeypatch.setattr(
+        pdfmod, "markdown_to_pdf", lambda md, out: out.write_text("pdf", encoding="utf-8")
+    )
+
+    src = tmp_path / "Foo-2506.pdf"
+    src.write_bytes(b"%PDF-1.4 stub")
+    notes_dir = workspace.work_dir(src)
+    _seed_chapter(notes_dir, 6, "Background")
+
+    config.set_book_citations(False)  # default off …
+    res = runner.invoke(cli.app, ["book", str(src), "--citations"])  # … but flag forces on
+    assert res.exit_code == 0, res.stdout
+    assert (tmp_path / "Foo-2506.tnotes.md").is_file()
+    assert not (tmp_path / "Foo-2506.tnotes.reading.md").exists()
+
+    config.set_book_citations(True)  # default on …
+    res = runner.invoke(cli.app, ["book", str(src), "--no-citations"])  # … but flag forces off
+    assert res.exit_code == 0, res.stdout
+    assert (tmp_path / "Foo-2506.tnotes.reading.md").is_file()
+
+
 def _seed_chapter_for_language(notes_dir, num, title, language, body, style="outline"):
     """Seed one chapter's composed notes-set and its language-aware exported file."""
     cdir = workspace.compose_stage_dir(notes_dir, "chapters")

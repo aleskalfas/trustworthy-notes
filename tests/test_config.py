@@ -177,6 +177,42 @@ def test_resolve_language_flag_wins_over_config(cfg):
     assert cfg.resolve_language("ja") == "ja"
 
 
+def test_set_get_book_citations_round_trip(cfg):
+    # #154: unset reads as None (distinct from a stored False), then round-trips.
+    assert cfg.get_book_citations() is None  # unset
+    cfg.set_book_citations(False)
+    assert cfg.get_book_citations() is False
+    cfg.set_book_citations(True)
+    assert cfg.get_book_citations() is True
+
+
+def test_book_citations_false_is_a_real_value_not_unset(cfg):
+    # #154: a stored False must stay distinguishable from "never chosen" (None), so
+    # resolution applies the built-in default only when the key is genuinely absent.
+    cfg.set_book_citations(False)
+    assert cfg.get_book_citations() is False
+
+
+def test_resolve_book_citations_built_in_when_nothing_set(cfg):
+    # #154: no flag, nothing configured → the built-in default (on / True).
+    assert cfg.resolve_book_citations(None) is True
+    assert cfg.resolve_book_citations(None) == cfg.DEFAULT_BOOK_CITATIONS
+
+
+def test_resolve_book_citations_config_wins_over_built_in(cfg):
+    # #154: a stored setting overrides the built-in default when no flag is passed.
+    cfg.set_book_citations(False)
+    assert cfg.resolve_book_citations(None) is False
+
+
+def test_resolve_book_citations_flag_wins_over_config(cfg):
+    # #154: an explicit flag beats both config and the built-in default, either way.
+    cfg.set_book_citations(False)
+    assert cfg.resolve_book_citations(True) is True
+    cfg.set_book_citations(True)
+    assert cfg.resolve_book_citations(False) is False
+
+
 def test_resolve_language_does_not_read_os_locale(cfg, monkeypatch):
     # ADR-008 keeps platform I/O off the hot resolve path: resolution must reach
     # the built-in default without ever calling detect_os_language.

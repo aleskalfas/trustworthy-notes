@@ -68,6 +68,27 @@ def test_config_show_built_in_language_when_unset(cli):
     assert f"language: {cli.config.DEFAULT_LANGUAGE}" in res.stdout
 
 
+def test_config_set_citations_round_trips(cli):
+    # #154: set-citations persists and echoes; show then reports it from config.
+    res = runner.invoke(cli.app, ["config", "set-citations", "false"])
+    assert res.exit_code == 0
+    assert "False" in res.stdout
+    assert cli.config.get_book_citations() is False
+
+    res = runner.invoke(cli.app, ["config", "show"])
+    assert res.exit_code == 0
+    assert "book citations: False" in res.stdout
+    assert "from config" in res.stdout
+
+
+def test_config_show_built_in_citations_when_unset(cli):
+    # #154: with nothing configured, show reports the built-in default (on / True).
+    res = runner.invoke(cli.app, ["config", "show"])
+    assert res.exit_code == 0
+    assert f"book citations: {cli.config.DEFAULT_BOOK_CITATIONS}" in res.stdout
+    assert "built-in" in res.stdout
+
+
 def test_config_set_no_update_check_round_trips(cli):
     assert cli.config.get_no_update_check() is False  # default: nudge on
     res = runner.invoke(cli.app, ["config", "set-no-update-check", "true"])
