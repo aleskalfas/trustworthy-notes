@@ -300,6 +300,46 @@ def test_seed_language_does_not_nag_when_already_set(isolated_config, monkeypatc
     assert config.get_language() == "de"  # unchanged
 
 
+# --- seed_book_citations: first-run-only seed of the book-citations default (#154) --
+
+
+def test_seed_book_citations_asks_once_and_persists_yes(isolated_config, monkeypatch):
+    # #154: nothing configured → ask; a bare Enter accepts the offered "yes" (on).
+    monkeypatch.setattr(builtins, "input", lambda _p="": "")  # Enter
+    assert config.get_book_citations() is None
+    onboarding.seed_book_citations()
+    assert config.get_book_citations() is True
+
+
+def test_seed_book_citations_persists_no(isolated_config, monkeypatch):
+    # #154: an explicit "n" flips the default to off (clean reading copy).
+    monkeypatch.setattr(builtins, "input", lambda _p="": "n")
+    onboarding.seed_book_citations()
+    assert config.get_book_citations() is False
+
+
+def test_seed_book_citations_does_not_nag_when_already_set(isolated_config, monkeypatch):
+    # #154: a returning user who has set the default is never prompted, even to off.
+    config.set_book_citations(False)
+
+    def must_not_prompt(_p=""):
+        raise AssertionError("must not prompt when the citations default is already set")
+
+    monkeypatch.setattr(builtins, "input", must_not_prompt)
+    onboarding.seed_book_citations()
+    assert config.get_book_citations() is False  # unchanged
+
+
+def test_seed_book_citations_fail_safe_on_eof_defaults_to_yes(isolated_config, monkeypatch):
+    # #154: a non-interactive run (EOF) keeps the offered "yes" and persists it (on).
+    def raise_eof(_p=""):
+        raise EOFError
+
+    monkeypatch.setattr(builtins, "input", raise_eof)
+    onboarding.seed_book_citations()
+    assert config.get_book_citations() is True
+
+
 def test_seed_language_is_eof_safe_keeps_default(isolated_config, monkeypatch):
     # #114: a non-interactive run (EOF) keeps the offered default — fail-safe, no crash.
     monkeypatch.setattr(config, "detect_os_language", lambda: "cs")
@@ -397,15 +437,16 @@ def test_shortcut_offer_declines_on_no(monkeypatch):
 
 
 def test_onboard_full_optin_flow_stores_everything(isolated_config, monkeypatch, capsys):
-    # Key prompt, then the language seed (#114, Enter accepts the OS default), then
-    # token/name (token-only feedback, #53), then 'y' to the shortcut offer. The
-    # feedback repo is the built-in default.
+    # Key prompt, then the language seed (#114, Enter accepts the OS default), then the
+    # book-citations seed (#154, Enter accepts the default on), then token/name
+    # (token-only feedback, #53), then 'y' to the shortcut offer. The feedback repo is
+    # the built-in default.
     _stub_listing(monkeypatch, available=True)
     monkeypatch.setattr(config, "detect_os_language", lambda: "cs")
     monkeypatch.setattr(
         builtins,
         "input",
-        _scripted_input(["sk-ant-onboard", "", "ghp_tok", "Grace", "y"]),
+        _scripted_input(["sk-ant-onboard", "", "", "ghp_tok", "Grace", "y"]),
     )
     monkeypatch.setattr(winlaunch, "create_make_notes_shortcut", lambda: True)
     monkeypatch.setattr(winlaunch, "create_feedback_shortcut", lambda: True)
@@ -420,10 +461,11 @@ def test_onboard_full_optin_flow_stores_everything(isolated_config, monkeypatch,
 
 
 def test_onboard_key_then_skip_feedback(isolated_config, monkeypatch, capsys):
-    # Key set, language seeded (Enter accepts the default), but the user skips
-    # feedback (empty token): no shortcut offer reached.
+    # Key set, language seeded (Enter accepts the default), book-citations seeded
+    # (Enter accepts on), but the user skips feedback (empty token): no shortcut
+    # offer reached.
     monkeypatch.setattr(config, "detect_os_language", lambda: "en")
-    monkeypatch.setattr(builtins, "input", _scripted_input(["sk-ant-onboard", "", ""]))
+    monkeypatch.setattr(builtins, "input", _scripted_input(["sk-ant-onboard", "", "", ""]))
 
     def must_not_create():
         raise AssertionError("shortcut offer must not run when feedback was skipped")

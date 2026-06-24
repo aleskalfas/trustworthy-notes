@@ -158,6 +158,27 @@ def seed_language() -> None:
     print(f"Reading language set to {chosen}. (Change it any time with `tnotes config set-language`.)")
 
 
+def seed_book_citations() -> None:
+    """First-run only: seed whether `tnotes book` keeps citations by default (#154).
+
+    The cited book is the authoritative artefact, so we offer "on" as the one-tap
+    default the user confirms or overrides, and persist the choice. Seeds only when
+    nothing is configured yet — a returning user who has set the default is never
+    nagged. Fully fail-safe: EOF/interrupt (and a bare Enter) keep the offered "yes",
+    so a non-interactive run is a clean no-op that simply persists the default (on).
+    """
+    if config.get_book_citations() is not None:
+        return
+    try:
+        answer = input("\nInclude citations in books by default? [Y/n]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    chosen = answer not in ("n", "no")
+    config.set_book_citations(chosen)
+    state = "on" if chosen else "off"
+    print(f"Book citations default set to {state}. (Change it any time with `tnotes config set-citations`.)")
+
+
 def _prompt_repo(repo_default: Optional[str]) -> str:
     """Prompt for the feedback repo as ``owner/name``, normalising a pasted URL.
 
@@ -265,6 +286,7 @@ def onboard() -> None:
     if not ensure_api_key():
         return
     seed_language()
+    seed_book_citations()
     if setup_feedback():
         offer_desktop_shortcuts()
     print(

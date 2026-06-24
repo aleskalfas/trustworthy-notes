@@ -370,6 +370,29 @@ On first run, the bootstrap flow (the friendly screen a Windows double-click sho
 offers your operating system's language as a one-tap default — press Enter to accept,
 or type a different code. That seed happens once; a returning user is never re-asked.
 
+### Choosing whether books keep citations
+
+`tnotes book` keeps the `[s-N]` citation markers and the *Notes & Sources* appendix by
+default — the cited book is the authoritative artefact. Pass `--no-citations` for a
+clean reading copy (written to `<stem>.tnotes.reading.md/.pdf`), leaving the cited
+`<stem>.tnotes.*` as the authority. If you always want the clean read-through, flip the
+default once instead of typing the flag every run; an explicit flag still wins for a
+single run. It resolves in layers, most specific first:
+
+1. an explicit `--citations` / `--no-citations` flag on the run,
+2. else a default you saved with `tnotes config set-citations`,
+3. else the built-in default `on` (citations kept).
+
+```
+tnotes config set-citations false   # default to clean reading copies (no citations)
+tnotes config set-citations true    # back to cited books by default
+tnotes config show                  # show the resolved default and where it comes from
+tnotes book INPUT.pdf --citations   # keep citations for one run regardless of the default
+```
+
+On first run, the bootstrap flow offers this as a one-tap default too (citations on);
+the choice is saved once and a returning user is never re-asked.
+
 ### Cost estimates
 
 After each page, `tnotes extract` prints an **estimated** USD cost, then a

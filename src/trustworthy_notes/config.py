@@ -74,6 +74,12 @@ DEFAULT_EFFORT = "low"
 # tool's working default and the last link in the resolution chain (ADR-008).
 DEFAULT_LANGUAGE = "en"
 
+# Built-in default for whether `tnotes book` keeps citations (#154). On by default:
+# the cited book (with [s-N] markers and the Notes & Sources appendix) is the
+# authoritative artefact. The user can flip the default to off via config for a
+# clean reading copy, but an explicit `--citations`/`--no-citations` flag always wins.
+DEFAULT_BOOK_CITATIONS = True
+
 # Built-in default feedback repo (#52). The repo name is NOT a secret — only the
 # token is (ADR-003's bright line), and the token is never defaulted or baked in.
 # Defaulting the repo here means feedback works with only a token, no repo setup
@@ -249,6 +255,40 @@ def _normalise_language(raw: Optional[str]) -> Optional[str]:
     if not language or language in ("c", "posix"):
         return None
     return language
+
+
+def get_book_citations() -> Optional[bool]:
+    """Whether `tnotes book` keeps citations by default, or None if unset (#154).
+
+    None — an absent key — is distinct from a stored ``False``: it lets
+    :func:`resolve_book_citations` tell "the user has never chosen" from "the user
+    chose off", so the built-in default applies only in the former case.
+    """
+    cfg = load()
+    return cfg.get("book_citations") if "book_citations" in cfg else None
+
+
+def set_book_citations(value: bool) -> None:
+    """Persist the default for whether `tnotes book` keeps citations (#154)."""
+    cfg = load()
+    cfg["book_citations"] = bool(value)
+    save(cfg)
+
+
+def resolve_book_citations(flag: Optional[bool]) -> bool:
+    """Resolve whether `tnotes book` keeps citations: an explicit flag wins, then
+    the user config, then the built-in default (#154). The single source of
+    book-citations resolution.
+
+    ``flag is None`` means the `--citations`/`--no-citations` option was not passed,
+    so the stored setting drives; an absent stored setting falls through to
+    :data:`DEFAULT_BOOK_CITATIONS` (on). A stored ``False`` is a meaningful choice
+    and is preserved — only ``None`` reads as unset.
+    """
+    if flag is not None:
+        return flag
+    stored = get_book_citations()
+    return stored if stored is not None else DEFAULT_BOOK_CITATIONS
 
 
 def get_feedback_repo() -> str:
