@@ -46,16 +46,42 @@ import sys
 from pathlib import Path
 
 
+def _windowless_attached_count() -> int:
+    """How many of *our own* processes share a freshly-spawned console — the
+    count :func:`is_windowless_launch` must see for a bare double-click / drag.
+
+    The crux of issue #158. The original detector assumed this was always ``1``,
+    but that only holds for a source / one-dir run. The distributed build is a
+    PyInstaller **one-file** exe (``tn.spec``), and a one-file build runs a
+    *bootloader* parent that unpacks the payload to a temp dir and launches the
+    real app as a **child** — and the bootloader stays alive, attached to the
+    same console, until the child exits. So a double-clicked one-file exe shows
+    *two* of our processes on the console, not one; a shell launch shows three
+    (shell + bootloader + child). Keying off ``== 1`` therefore never fired on a
+    real frozen double-click, the onboarding screen was skipped, and the window
+    flashed shut — exactly the reported symptom.
+
+    We detect "frozen" via ``sys.frozen`` (PyInstaller sets it). We ship one-file
+    only, so frozen ⇒ bootloader present ⇒ expect ``2``; otherwise expect ``1``.
+    The terminal case stays cleanly separated either way — a shell always adds
+    exactly one more process than the windowless case.
+    """
+    return 2 if getattr(sys, "frozen", False) else 1
+
+
 def is_windowless_launch() -> bool:
     """True only when this process owns its own console — a double-click / drag launch.
 
-    The crux of issue #33. On Windows, when a user double-clicks the exe or drags a
-    file onto it, Windows spawns a brand-new console attached to *only* this
-    process; when the user instead runs it from an existing PowerShell/cmd, that
-    shell is already attached to the console, so the console has more than one
-    process. ``kernel32.GetConsoleProcessList`` reports how many processes share the
-    console: ``1`` means we are alone → windowless (the window will vanish on exit);
-    ``>1`` means launched from a shell → behave exactly as a normal terminal.
+    The crux of issue #33 (and the one-file fix in #158). On Windows, when a user
+    double-clicks the exe or drags a file onto it, Windows spawns a brand-new
+    console attached to *only* this program's process(es); when the user instead
+    runs it from an existing PowerShell/cmd, that shell is already attached to the
+    console, so the console has one more process than the windowless case.
+    ``kernel32.GetConsoleProcessList`` reports how many processes share the
+    console; we compare it against :func:`_windowless_attached_count` (``1`` for a
+    source/one-dir run, ``2`` for the one-file frozen build whose bootloader parent
+    stays attached). An exact match → windowless (the window will vanish on exit);
+    one more → launched from a shell → behave exactly as a normal terminal.
 
     Fail-safe by construction — returns ``False`` whenever we cannot be *certain* we
     are windowless:
@@ -63,8 +89,8 @@ def is_windowless_launch() -> bool:
     * non-Windows (no such API): ``False``;
     * the ``ctypes``/``windll`` call is unavailable or raises (locked-down build,
       no console at all, redirected handles): ``False``;
-    * an ambiguous count (``<= 1`` only counts as windowless when it is exactly 1;
-      ``0`` or a negative error return does not): ``False``.
+    * an ambiguous count (only the exact expected count is windowless; ``0`` or a
+      negative error return does not): ``False``.
 
     The reason the unsafe direction is "behave like a terminal" is that the only
     behaviours gated on this — pausing and prompting on stdin — are *harmful* in a
@@ -88,7 +114,7 @@ def is_windowless_launch() -> bool:
         # Any failure to query — no console, missing API, restricted build —
         # resolves to "not windowless", the safe direction.
         return False
-    return attached == 1
+    return attached == _windowless_attached_count()
 
 
 def pause(prompt: str = "\nPress Enter to close this window…") -> None:

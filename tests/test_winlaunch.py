@@ -67,11 +67,38 @@ def test_detector_true_only_for_exactly_one_attached(monkeypatch):
     fake = type("W", (), {"kernel32": _K()})()
     monkeypatch.setattr(ctypes, "windll", fake, raising=False)
 
+    # Source / one-dir run (sys.frozen absent → expected count is 1).
     fake.kernel32.count = 1
     assert winlaunch.is_windowless_launch() is True
     fake.kernel32.count = 2  # launched from a shell → not windowless
     assert winlaunch.is_windowless_launch() is False
     fake.kernel32.count = 0  # ambiguous error return → fail safe
+    assert winlaunch.is_windowless_launch() is False
+
+
+def test_detector_threshold_shifts_to_two_for_onefile_frozen_build(monkeypatch):
+    # Regression for #158: a PyInstaller one-file build keeps its bootloader parent
+    # attached to the console alongside the unpacked child, so a bare double-click
+    # shows TWO of our processes, not one. The detector must expect 2 when frozen,
+    # or onboarding is skipped and the window flashes shut.
+    monkeypatch.setattr(winlaunch.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(winlaunch.sys, "frozen", True, raising=False)
+    import ctypes
+
+    class _K:
+        count = 2
+
+        def GetConsoleProcessList(self, _slot, _n):
+            return self.count
+
+    fake = type("W", (), {"kernel32": _K()})()
+    monkeypatch.setattr(ctypes, "windll", fake, raising=False)
+
+    fake.kernel32.count = 2  # double-click: bootloader + app → windowless
+    assert winlaunch.is_windowless_launch() is True
+    fake.kernel32.count = 3  # shell + bootloader + app → not windowless
+    assert winlaunch.is_windowless_launch() is False
+    fake.kernel32.count = 1  # fewer than expected → fail safe
     assert winlaunch.is_windowless_launch() is False
 
 
